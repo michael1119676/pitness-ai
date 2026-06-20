@@ -4,8 +4,11 @@
 
 1. Create a Supabase project.
 2. Open **SQL Editor** and run `supabase/schema.sql`.
-3. In **Authentication > Sign In / Providers**, enable anonymous sign-ins.
-4. Copy these values from **Project Settings > API**:
+3. In **Authentication > Sign In / Providers**, enable **Email** sign-ins.
+4. For a small private beta, you can turn off email confirmation in
+   **Authentication > Sign In / Providers > Email** so newly created accounts can sign in
+   immediately. If confirmation stays on, users must verify their email before logging in.
+5. Copy these values from **Project Settings > API**:
    - Project URL
    - anon public key
 
@@ -16,10 +19,10 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
-The app uses `app_state_snapshots` for MVP cloud persistence. It stores each in-app profile as
-user-owned JSONB under Supabase RLS, keyed by `(user_id, profile_id)`. This keeps the existing
-string-based equipment and exercise IDs intact while the normalized tables are available for the
-next migration step.
+The app uses Supabase Auth email/password accounts plus `app_state_snapshots` for MVP cloud
+persistence. It stores each account's app state as user-owned JSONB under Supabase RLS, keyed by
+`(user_id, profile_id)`. This keeps the existing string-based equipment and exercise IDs intact
+while the normalized tables are available for the next migration step.
 
 If you already ran an older schema where `app_state_snapshots.user_id` was the only primary key,
 run this once in SQL Editor before syncing multiple profiles:
@@ -67,7 +70,7 @@ npm run build
 npm run dev
 ```
 
-Then open `/settings`, use **Supabase 클라우드 동기화**, and run:
+Then create or log into an account. Open `/settings`, use **Supabase 클라우드 동기화**, and run:
 
 1. 세션 확인
 2. 클라우드에 업로드

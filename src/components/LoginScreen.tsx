@@ -1,155 +1,290 @@
 "use client";
 
-import { LogIn, Plus, UserRound } from "lucide-react";
+import { Dumbbell, Eye, EyeOff, Loader2, LogIn, UserPlus } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import {
-  createAppUser,
-  getActiveAppUser,
-  getUserInitial,
-  loadAppUsers,
-  maxAppUsers,
-  setActiveAppUser,
-  type AppUser
+  activateAppUserFromAuth,
+  isAccountAuthUser,
+  loadAppUsers
 } from "@/lib/app-users";
+import { pullCloudSnapshotToLocal, pushLocalSnapshotToCloud } from "@/lib/cloud-sync";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase-client";
 
-const accentClassNames: Record<string, string> = {
-  mint: "bg-mint text-white",
-  sky: "bg-sky-600 text-white",
-  coral: "bg-rose-500 text-white"
-};
+type AuthMode = "sign_in" | "sign_up";
+
+function isNoSnapshotError(error: unknown) {
+  return error instanceof Error && error.message.includes("아직 없습니다");
+}
+
+async function restoreCloudStateIfPresent() {
+  try {
+    await pullCloudSnapshotToLocal();
+  } catch (error) {
+    if (!isNoSnapshotError(error)) throw error;
+  }
+}
 
 export function LoginScreen() {
   const router = useRouter();
-  const [users, setUsers] = useState<AppUser[]>([]);
-  const [activeUserId, setActiveUserId] = useState<string | null>(null);
+  const [mode, setMode] = useState<AuthMode>("sign_in");
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [recentUsers, setRecentUsers] = useState(loadAppUsers);
 
-  const canCreate = users.length < maxAppUsers;
-  const slotsLabel = useMemo(() => `${users.length}/${maxAppUsers}`, [users.length]);
-
-  function refresh() {
-    setUsers(loadAppUsers());
-    setActiveUserId(getActiveAppUser()?.id ?? null);
-  }
+  const configured = isSupabaseConfigured();
+  const isSignUp = mode === "sign_up";
 
   useEffect(() => {
-    refresh();
-  }, []);
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
 
-  function enter(userId: string) {
-    const user = setActiveAppUser(userId);
-    if (!user) {
-      setMessage("프로필을 찾지 못했습니다.");
-      refresh();
-      return;
-    }
-    router.replace("/today");
-  }
+    supabase.auth.getSession().then(({ data }) => {
+      const authUser = data.session?.user ?? null;
+      if (isAccountAuthUser(authUser)) {
+        activateAppUserFromAuth(authUser);
+        router.replace("/today");
+      } else if (authUser) {
+        void supabase.auth.signOut();
+      }
+    });
+  }, [router]);
 
-  function create(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
 
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setMessage("Supabase 환경변수가 필요합니다. Vercel과 .env.local 설정을 확인하세요.");
+      return;
+    }
+
+    if (password.length < 6) {
+      setMessage("비밀번호는 최소 6자 이상으로 입력하세요.");
+      return;
+    }
+
+    setIsBusy(true);
     try {
-      const user = createAppUser(name);
-      if (!user) return;
-      setName("");
+      if (isSignUp) {
+        const result = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: {
+            data: {
+              display_name: name.trim()
+            }
+          }
+        });
+
+        if (result.error) throw new Error(result.error.message);
+        if (!result.data.session?.user) {
+          setMessage("계정이 생성되었습니다. 이메일 확인이 켜져 있다면 메일 확인 후 로그인하세요.");
+          return;
+        }
+
+        activateAppUserFromAuth(result.data.session.user, name);
+        await pushLocalSnapshotToCloud().catch(() => undefined);
+        router.replace("/today");
+        return;
+      }
+
+      const result = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password
+      });
+
+      if (result.error) throw new Error(result.error.message);
+      if (!result.data.user) throw new Error("로그인 세션을 만들지 못했습니다.");
+
+      activateAppUserFromAuth(result.data.user);
+      await restoreCloudStateIfPresent();
       router.replace("/today");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "프로필을 만들지 못했습니다.");
+      setMessage(error instanceof Error ? error.message : "로그인 처리 중 오류가 발생했습니다.");
+    } finally {
+      setRecentUsers(loadAppUsers());
+      setIsBusy(false);
     }
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-4 py-8 text-ink">
-      <div className="mb-6">
-        <p className="text-xs font-semibold uppercase tracking-wide text-mint">Pitness AI</p>
-        <h1 className="mt-2 text-3xl font-semibold md:text-4xl">누가 운동하나요?</h1>
-      </div>
+    <main className="mx-auto flex min-h-screen max-w-5xl items-center px-4 py-8 text-ink">
+      <div className="grid w-full gap-5 lg:grid-cols-[0.85fr_1.15fr] lg:items-stretch">
+        <section className="flex flex-col justify-between rounded-md border border-line bg-ink p-5 text-white shadow-soft">
+          <div>
+            <span className="grid size-11 place-items-center rounded-md bg-white text-ink">
+              <Dumbbell size={22} aria-hidden />
+            </span>
+            <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-mint">
+              Pitness AI
+            </p>
+            <h1 className="mt-2 text-3xl font-semibold md:text-4xl">계정으로 시작하기</h1>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              운동 기록, 인바디, 식단, 기구 설정을 계정별로 분리해서 저장합니다.
+            </p>
+          </div>
+          <div className="mt-8 grid gap-2 text-sm text-slate-300">
+            {recentUsers.length > 0 ? (
+              <div className="rounded-md bg-white/8 px-3 py-3">
+                <p className="text-xs font-semibold text-slate-400">최근 계정</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {recentUsers.map((user) => (
+                    <button
+                      key={user.id}
+                      type="button"
+                      onClick={() => setEmail(user.email ?? "")}
+                      className="rounded-md bg-white/10 px-2 py-1 text-xs font-semibold text-white"
+                    >
+                      {user.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {!configured ? (
+              <div className="rounded-md bg-amber-400/15 px-3 py-3 text-amber-100">
+                Supabase URL과 publishable key가 필요합니다.
+              </div>
+            ) : null}
+          </div>
+        </section>
 
-      <section className="rounded-md border border-line bg-white p-4 shadow-soft">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">프로필</h2>
-          <span className="rounded-md bg-panel px-2 py-1 text-xs font-semibold text-slate-600">
-            {slotsLabel}
-          </span>
-        </div>
-
-        <div className="mt-4 grid gap-3">
-          {users.map((user) => (
+        <section className="rounded-md border border-line bg-white p-4 shadow-soft md:p-5">
+          <div className="grid grid-cols-2 rounded-md bg-panel p-1">
             <button
-              key={user.id}
               type="button"
-              onClick={() => enter(user.id)}
-              className={`flex min-h-16 items-center justify-between gap-3 rounded-md border px-3 text-left transition ${
-                activeUserId === user.id
-                  ? "border-ink bg-panel"
-                  : "border-line bg-white hover:bg-panel"
+              onClick={() => setMode("sign_in")}
+              className={`min-h-10 rounded-md text-sm font-semibold ${
+                mode === "sign_in" ? "bg-white text-ink shadow-soft" : "text-slate-500"
               }`}
             >
-              <span className="flex min-w-0 items-center gap-3">
-                <span
-                  className={`grid size-10 shrink-0 place-items-center rounded-md text-sm font-bold ${
-                    accentClassNames[user.accent] ?? accentClassNames.mint
-                  }`}
-                >
-                  {getUserInitial(user.name)}
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-semibold">{user.name}</span>
-                  <span className="block text-xs text-slate-500">
-                    {activeUserId === user.id ? "현재 선택됨" : "선택"}
-                  </span>
-                </span>
-              </span>
-              <LogIn size={18} aria-hidden />
+              로그인
             </button>
-          ))}
-
-          {users.length === 0 ? (
-            <div className="rounded-md bg-panel px-3 py-4 text-sm font-medium text-slate-600">
-              첫 프로필을 만들면 기존 기기 데이터가 자동으로 연결됩니다.
-            </div>
-          ) : null}
-        </div>
-
-        <form onSubmit={create} className="mt-4 flex flex-col gap-2 sm:flex-row">
-          <label className="sr-only" htmlFor="profile-name">
-            프로필 이름
-          </label>
-          <div className="relative min-w-0 flex-1">
-            <UserRound
-              size={17}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-              aria-hidden
-            />
-            <input
-              id="profile-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder={canCreate ? "이름" : "프로필 최대 개수"}
-              disabled={!canCreate}
-              className="min-h-11 w-full rounded-md border border-line bg-white pl-10 pr-3 text-sm font-medium disabled:bg-panel"
-            />
+            <button
+              type="button"
+              onClick={() => setMode("sign_up")}
+              className={`min-h-10 rounded-md text-sm font-semibold ${
+                mode === "sign_up" ? "bg-white text-ink shadow-soft" : "text-slate-500"
+              }`}
+            >
+              계정 만들기
+            </button>
           </div>
-          <button
-            type="submit"
-            disabled={!canCreate}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-ink px-4 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            <Plus size={17} aria-hidden />
-            추가
-          </button>
-        </form>
 
-        {message ? (
-          <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
-            {message}
-          </p>
-        ) : null}
-      </section>
+          <form onSubmit={submit} className="mt-5 space-y-4">
+            {isSignUp ? (
+              <Field
+                label="이름"
+                id="account-name"
+                value={name}
+                onChange={setName}
+                autoComplete="name"
+                placeholder="예: Michael"
+              />
+            ) : null}
+            <Field
+              label="이메일"
+              id="account-email"
+              type="email"
+              value={email}
+              onChange={setEmail}
+              autoComplete="email"
+              placeholder="you@example.com"
+              required
+            />
+            <div>
+              <label htmlFor="account-password" className="text-sm font-semibold text-slate-700">
+                비밀번호
+              </label>
+              <div className="relative mt-2">
+                <input
+                  id="account-password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete={isSignUp ? "new-password" : "current-password"}
+                  className="min-h-12 w-full rounded-md border border-line bg-white px-3 pr-12 text-sm font-medium"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((current) => !current)}
+                  className="absolute right-1 top-1 grid size-10 place-items-center rounded-md text-slate-500"
+                  aria-label={showPassword ? "비밀번호 숨기기" : "비밀번호 보기"}
+                  title={showPassword ? "비밀번호 숨기기" : "비밀번호 보기"}
+                >
+                  {showPassword ? <EyeOff size={17} aria-hidden /> : <Eye size={17} aria-hidden />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={!configured || isBusy}
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-md bg-ink px-4 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {isBusy ? (
+                <Loader2 size={17} className="animate-spin" aria-hidden />
+              ) : isSignUp ? (
+                <UserPlus size={17} aria-hidden />
+              ) : (
+                <LogIn size={17} aria-hidden />
+              )}
+              {isSignUp ? "계정 만들기" : "로그인"}
+            </button>
+          </form>
+
+          {message ? (
+            <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
+              {message}
+            </p>
+          ) : null}
+        </section>
+      </div>
     </main>
+  );
+}
+
+function Field({
+  label,
+  id,
+  type = "text",
+  value,
+  onChange,
+  autoComplete,
+  placeholder,
+  required = false
+}: {
+  label: string;
+  id: string;
+  type?: string;
+  value: string;
+  onChange: (value: string) => void;
+  autoComplete?: string;
+  placeholder?: string;
+  required?: boolean;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="text-sm font-semibold text-slate-700">
+        {label}
+      </label>
+      <input
+        id={id}
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        autoComplete={autoComplete}
+        placeholder={placeholder}
+        required={required}
+        className="mt-2 min-h-12 w-full rounded-md border border-line bg-white px-3 text-sm font-medium"
+      />
+    </div>
   );
 }

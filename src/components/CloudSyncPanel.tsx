@@ -73,7 +73,7 @@ export function CloudSyncPanel() {
             <h2 className="text-lg font-semibold">Supabase 클라우드 동기화</h2>
           </div>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Supabase가 설정되면 현재 localStorage 기반 앱 상태를 사용자별 snapshot으로 저장합니다.
+            로그인한 Supabase 계정 기준으로 현재 앱 상태를 snapshot으로 저장합니다.
           </p>
         </div>
         <span
@@ -86,7 +86,7 @@ export function CloudSyncPanel() {
       </div>
 
       <div className="mt-4 grid gap-2 md:grid-cols-5">
-        <Metric label="앱 프로필" value={status.profileName ?? "-"} />
+        <Metric label="앱 계정" value={status.profileName ?? "-"} />
         <Metric label="Supabase" value={shortId(status.userId)} />
         <Metric label="마지막 업로드" value={formatTime(status.lastPushAt)} />
         <Metric label="마지막 복원" value={formatTime(status.lastPullAt)} />
@@ -96,8 +96,8 @@ export function CloudSyncPanel() {
       {!status.configured ? (
         <div className="mt-4 rounded-md bg-panel px-3 py-3 text-sm leading-6 text-slate-700">
           `.env.local`과 Vercel 환경변수에 `NEXT_PUBLIC_SUPABASE_URL`,
-          `NEXT_PUBLIC_SUPABASE_ANON_KEY`를 추가하세요. Supabase Auth에서 anonymous sign-in도
-          켜야 이 패널이 자동 사용자 세션을 만들 수 있습니다.
+          `NEXT_PUBLIC_SUPABASE_ANON_KEY`를 추가하세요. Supabase Auth에서 Email provider를
+          켜야 계정 로그인과 동기화를 사용할 수 있습니다.
         </div>
       ) : null}
 

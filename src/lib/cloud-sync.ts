@@ -1,6 +1,6 @@
 "use client";
 
-import { getActiveAppUser, getScopedLocalStoreKey } from "@/lib/app-users";
+import { getActiveAppUser, getScopedLocalStoreKey, isAccountAuthUser } from "@/lib/app-users";
 import { appLocalStorageKeys, localStoreKeys } from "@/lib/local-store-keys";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase-client";
 
@@ -78,7 +78,7 @@ export function getCloudSyncStatus(): CloudSyncStatus {
 export function exportLocalAppSnapshot(): AppStateSnapshot {
   const profile = getActiveAppUser();
   if (!profile) {
-    throw new Error("먼저 앱 사용자를 선택하세요.");
+    throw new Error("먼저 로그인하세요.");
   }
 
   const values = appLocalStorageKeys.reduce<Record<string, SnapshotValue>>((snapshot, key) => {
@@ -101,7 +101,7 @@ export function restoreLocalAppSnapshot(snapshot: AppStateSnapshot) {
   if (!canUseStorage()) return;
   const profile = getActiveAppUser();
   if (!profile) {
-    throw new Error("먼저 앱 사용자를 선택하세요.");
+    throw new Error("먼저 로그인하세요.");
   }
 
   suppressAutoSync = true;
@@ -123,7 +123,7 @@ export function restoreLocalAppSnapshot(snapshot: AppStateSnapshot) {
 export async function ensureCloudSession() {
   const profile = getActiveAppUser();
   if (!profile) {
-    throw new Error("먼저 앱 사용자를 선택하세요.");
+    throw new Error("먼저 로그인하세요.");
   }
 
   const supabase = getSupabaseBrowserClient();
@@ -132,8 +132,9 @@ export async function ensureCloudSession() {
   }
 
   const existing = await supabase.auth.getSession();
-  if (existing.data.session?.user) {
-    const userId = existing.data.session.user.id;
+  const authUser = existing.data.session?.user ?? null;
+  if (isAccountAuthUser(authUser)) {
+    const userId = authUser.id;
     saveMetadata({
       ...loadMetadata(),
       userId,
@@ -144,29 +145,13 @@ export async function ensureCloudSession() {
     return { supabase, userId };
   }
 
-  const signedIn = await supabase.auth.signInAnonymously();
-  if (signedIn.error || !signedIn.data.user) {
-    throw new Error(
-      signedIn.error?.message
-        ?? "익명 Supabase 세션을 만들지 못했습니다. Supabase Auth anonymous provider를 확인하세요."
-    );
-  }
-
-  const userId = signedIn.data.user.id;
-  saveMetadata({
-    ...loadMetadata(),
-    userId,
-    profileId: profile.id,
-    profileName: profile.name,
-    lastError: null
-  });
-  return { supabase, userId };
+  throw new Error("로그인된 Supabase 계정이 없습니다. 먼저 로그인하세요.");
 }
 
 export async function pushLocalSnapshotToCloud() {
   const profile = getActiveAppUser();
   if (!profile) {
-    throw new Error("먼저 앱 사용자를 선택하세요.");
+    throw new Error("먼저 로그인하세요.");
   }
 
   const { supabase, userId } = await ensureCloudSession();
@@ -198,7 +183,7 @@ export async function pushLocalSnapshotToCloud() {
 export async function pullCloudSnapshotToLocal() {
   const profile = getActiveAppUser();
   if (!profile) {
-    throw new Error("먼저 앱 사용자를 선택하세요.");
+    throw new Error("먼저 로그인하세요.");
   }
 
   const { supabase, userId } = await ensureCloudSession();

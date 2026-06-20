@@ -16,11 +16,13 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
+  activateAppUserFromAuth,
   clearActiveAppUser,
-  getActiveAppUser,
   getUserInitial,
+  isAccountAuthUser,
   type AppUser
 } from "@/lib/app-users";
+import { getSupabaseBrowserClient } from "@/lib/supabase-client";
 
 const navItems = [
   { href: "/today", label: "오늘", icon: CalendarDays },
@@ -39,24 +41,60 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const isLoginRoute = pathname === "/login";
 
   useEffect(() => {
-    const refresh = () => {
-      const user = getActiveAppUser();
-      setActiveUser(user);
-      if (!user && !isLoginRoute) {
+    let isMounted = true;
+    const supabase = getSupabaseBrowserClient();
+
+    const goToLogin = () => {
+      clearActiveAppUser();
+      if (isMounted) setActiveUser(null);
+      if (!isLoginRoute) {
         router.replace("/login");
       }
     };
 
-    refresh();
-    window.addEventListener("adfc-active-user-changed", refresh);
-    window.addEventListener("storage", refresh);
+    const refresh = async () => {
+      if (!supabase) {
+        goToLogin();
+        return;
+      }
+
+      const { data } = await supabase.auth.getSession();
+      const authUser = data.session?.user ?? null;
+      if (!isAccountAuthUser(authUser)) {
+        await supabase.auth.signOut();
+        goToLogin();
+        return;
+      }
+
+      const user = activateAppUserFromAuth(authUser);
+      if (isMounted) setActiveUser(user);
+    };
+
+    void refresh();
+    const authListener = supabase?.auth.onAuthStateChange((_event, session) => {
+      if (!isAccountAuthUser(session?.user)) {
+        if (session?.user) void supabase.auth.signOut();
+        goToLogin();
+        return;
+      }
+      const user = activateAppUserFromAuth(session.user);
+      if (isMounted) setActiveUser(user);
+    });
+
+    const handleUserChange = () => {
+      void refresh();
+    };
+    window.addEventListener("storage", handleUserChange);
     return () => {
-      window.removeEventListener("adfc-active-user-changed", refresh);
-      window.removeEventListener("storage", refresh);
+      isMounted = false;
+      authListener?.data.subscription.unsubscribe();
+      window.removeEventListener("storage", handleUserChange);
     };
   }, [isLoginRoute, router]);
 
-  function leaveUser() {
+  async function leaveUser() {
+    const supabase = getSupabaseBrowserClient();
+    await supabase?.auth.signOut();
     clearActiveAppUser();
     setActiveUser(null);
     router.push("/login");
@@ -69,7 +107,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (activeUser === undefined) {
     return (
       <div className="grid min-h-screen place-items-center px-4 text-sm font-semibold text-slate-500">
-        프로필 확인 중
+        계정 확인 중
       </div>
     );
   }
@@ -116,15 +154,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
           <div className="hidden shrink-0 items-center gap-2 md:flex">
-            <Link
-              href="/login"
-              className="flex min-h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-semibold text-slate-700"
-            >
+            <div className="flex min-h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-semibold text-slate-700">
               <span className="grid size-7 place-items-center rounded-md bg-mint text-xs font-bold text-white">
                 {getUserInitial(activeUser.name)}
               </span>
               <span className="max-w-24 truncate">{activeUser.name}</span>
-            </Link>
+            </div>
             <button
               type="button"
               onClick={leaveUser}
@@ -161,13 +196,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
-          <Link
-            href="/login"
+          <button
+            type="button"
+            onClick={leaveUser}
             className="flex min-h-14 flex-col items-center justify-center gap-1 rounded-md text-[11px] font-medium text-slate-600"
           >
             <UserRound size={18} aria-hidden />
             <span className="max-w-full truncate px-1">{activeUser.name}</span>
-          </Link>
+          </button>
         </div>
       </nav>
     </div>

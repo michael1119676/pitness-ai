@@ -1,9 +1,11 @@
 "use client";
 
+import type { User } from "@supabase/supabase-js";
 import { appLocalStorageKeys } from "@/lib/local-store-keys";
 
 export interface AppUser {
   id: string;
+  email: string | null;
   name: string;
   accent: string;
   createdAt: string;
@@ -12,9 +14,9 @@ export interface AppUser {
 export const maxAppUsers = 3;
 
 const appUserKeys = {
-  users: "adfc_app_users_v1",
-  activeUser: "adfc_active_app_user_v1",
-  legacyMigration: "adfc_legacy_data_migrated_v1"
+  users: "adfc_app_users_v2",
+  activeUser: "adfc_active_app_user_v2",
+  legacyMigration: "adfc_legacy_data_migrated_v2"
 } as const;
 
 const accentPool = ["mint", "sky", "coral"] as const;
@@ -23,16 +25,23 @@ function canUseStorage() {
   return typeof window !== "undefined" && Boolean(window.localStorage);
 }
 
-function makeUserId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `user-${crypto.randomUUID()}`;
-  }
-  return `user-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-}
-
 function normalizeName(name: string) {
   const trimmed = name.trim();
   return trimmed.length > 0 ? trimmed.slice(0, 24) : "사용자";
+}
+
+function nameFromAuthUser(user: User, fallback = "") {
+  const metadataName =
+    typeof user.user_metadata.display_name === "string"
+      ? user.user_metadata.display_name
+      : typeof user.user_metadata.name === "string"
+        ? user.user_metadata.name
+        : "";
+  return normalizeName(fallback || metadataName || user.email?.split("@")[0] || "사용자");
+}
+
+export function isAccountAuthUser(user: User | null | undefined): user is User {
+  return Boolean(user?.email) && user?.is_anonymous !== true;
 }
 
 function emitUserChange() {
@@ -42,7 +51,7 @@ function emitUserChange() {
 
 function saveAppUsers(users: AppUser[]) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(appUserKeys.users, JSON.stringify(users));
+  window.localStorage.setItem(appUserKeys.users, JSON.stringify(users.slice(0, maxAppUsers)));
 }
 
 export function loadAppUsers(): AppUser[] {
@@ -73,70 +82,65 @@ export function getScopedLocalStoreKey(baseKey: string, userId = getActiveAppUse
   return userId ? `${baseKey}:${userId}` : baseKey;
 }
 
-function migrateLegacyDataToUser(userId: string) {
+function copyStoredValue(sourceKey: string, destinationKey: string) {
+  if (!canUseStorage()) return 0;
+  if (window.localStorage.getItem(destinationKey) !== null) return 0;
+  const sourceValue = window.localStorage.getItem(sourceKey);
+  if (sourceValue === null) return 0;
+  window.localStorage.setItem(destinationKey, sourceValue);
+  return 1;
+}
+
+function migrateExistingDataToUser(userId: string, previousUserId: string | null) {
   if (!canUseStorage()) return;
-  if (window.localStorage.getItem(appUserKeys.legacyMigration)) return;
+
+  const migrationKey = `${appUserKeys.legacyMigration}:${userId}`;
+  if (window.localStorage.getItem(migrationKey)) return;
 
   let copied = 0;
   appLocalStorageKeys.forEach((baseKey) => {
-    const legacyValue = window.localStorage.getItem(baseKey);
-    const scopedKey = getScopedLocalStoreKey(baseKey, userId);
-    if (legacyValue !== null && window.localStorage.getItem(scopedKey) === null) {
-      window.localStorage.setItem(scopedKey, legacyValue);
-      copied += 1;
+    const destinationKey = getScopedLocalStoreKey(baseKey, userId);
+    if (previousUserId && previousUserId !== userId) {
+      copied += copyStoredValue(getScopedLocalStoreKey(baseKey, previousUserId), destinationKey);
     }
+    copied += copyStoredValue(baseKey, destinationKey);
   });
 
   window.localStorage.setItem(
-    appUserKeys.legacyMigration,
+    migrationKey,
     JSON.stringify({ userId, copied, migratedAt: new Date().toISOString() })
   );
 }
 
-export function setActiveAppUser(userId: string) {
+export function activateAppUserFromAuth(user: User, preferredName = "") {
   if (!canUseStorage()) return null;
-  const user = loadAppUsers().find((item) => item.id === userId) ?? null;
-  if (!user) return null;
 
-  window.localStorage.setItem(appUserKeys.activeUser, user.id);
-  migrateLegacyDataToUser(user.id);
+  const previousActiveUserId = getActiveAppUserId();
+  const users = loadAppUsers();
+  const existing = users.find((item) => item.id === user.id);
+  const nextUser: AppUser = {
+    id: user.id,
+    email: user.email ?? null,
+    name: nameFromAuthUser(user, preferredName || existing?.name),
+    accent: existing?.accent ?? accentPool[users.length % accentPool.length],
+    createdAt: existing?.createdAt ?? new Date().toISOString()
+  };
+  const nextUsers = [nextUser, ...users.filter((item) => item.id !== user.id)].slice(
+    0,
+    maxAppUsers
+  );
+
+  saveAppUsers(nextUsers);
+  window.localStorage.setItem(appUserKeys.activeUser, nextUser.id);
+  migrateExistingDataToUser(nextUser.id, previousActiveUserId);
   emitUserChange();
-  return user;
+  return nextUser;
 }
 
 export function clearActiveAppUser() {
   if (!canUseStorage()) return;
   window.localStorage.removeItem(appUserKeys.activeUser);
   emitUserChange();
-}
-
-export function createAppUser(name: string) {
-  if (!canUseStorage()) return null;
-  const users = loadAppUsers();
-  if (users.length >= maxAppUsers) {
-    throw new Error(`사용자는 최대 ${maxAppUsers}명까지 만들 수 있습니다.`);
-  }
-
-  const user: AppUser = {
-    id: makeUserId(),
-    name: normalizeName(name),
-    accent: accentPool[users.length % accentPool.length],
-    createdAt: new Date().toISOString()
-  };
-
-  saveAppUsers([...users, user]);
-  setActiveAppUser(user.id);
-  return user;
-}
-
-export function updateAppUserName(userId: string, name: string) {
-  const users = loadAppUsers();
-  const nextUsers = users.map((user) =>
-    user.id === userId ? { ...user, name: normalizeName(name) } : user
-  );
-  saveAppUsers(nextUsers);
-  emitUserChange();
-  return nextUsers.find((user) => user.id === userId) ?? null;
 }
 
 export function getUserInitial(name: string) {
