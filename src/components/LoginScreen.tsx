@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import {
   activateAppUserFromAuth,
+  activateGuestAppUser,
   isAccountAuthUser,
   loadAppUsers
 } from "@/lib/app-users";
@@ -12,6 +13,10 @@ import { pullCloudSnapshotToLocal, pushLocalSnapshotToCloud } from "@/lib/cloud-
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase-client";
 
 type AuthMode = "sign_in" | "sign_up";
+
+function loadRecentAccountUsers() {
+  return loadAppUsers().filter((user) => Boolean(user.email));
+}
 
 function isNoSnapshotError(error: unknown) {
   return error instanceof Error && error.message.includes("아직 없습니다");
@@ -34,7 +39,7 @@ export function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [recentUsers, setRecentUsers] = useState(loadAppUsers);
+  const [recentUsers, setRecentUsers] = useState(loadRecentAccountUsers);
 
   const configured = isSupabaseConfigured();
   const isSignUp = mode === "sign_up";
@@ -108,9 +113,16 @@ export function LoginScreen() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "로그인 처리 중 오류가 발생했습니다.");
     } finally {
-      setRecentUsers(loadAppUsers());
+      setRecentUsers(loadRecentAccountUsers());
       setIsBusy(false);
     }
+  }
+
+  function continueAsGuest() {
+    activateGuestAppUser();
+    setRecentUsers(loadRecentAccountUsers());
+    setMessage("");
+    router.replace("/today");
   }
 
   return (
@@ -245,6 +257,20 @@ export function LoginScreen() {
               {message}
             </p>
           ) : null}
+
+          <div className="mt-5 border-t border-line pt-5">
+            <button
+              type="button"
+              onClick={continueAsGuest}
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-md border border-line bg-white px-4 text-sm font-semibold text-ink shadow-soft"
+            >
+              <Dumbbell size={17} aria-hidden />
+              검증용으로 바로 들어가기
+            </button>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              계정 없이 앱 화면을 확인합니다. 기록은 이 브라우저에만 임시 저장됩니다.
+            </p>
+          </div>
         </section>
       </div>
     </main>

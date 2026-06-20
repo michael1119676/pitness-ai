@@ -1,6 +1,11 @@
 "use client";
 
-import { getActiveAppUser, getScopedLocalStoreKey, isAccountAuthUser } from "@/lib/app-users";
+import {
+  getActiveAppUser,
+  getScopedLocalStoreKey,
+  isAccountAuthUser,
+  isGuestAppUser
+} from "@/lib/app-users";
 import { appLocalStorageKeys, localStoreKeys } from "@/lib/local-store-keys";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase-client";
 
@@ -126,6 +131,10 @@ export async function ensureCloudSession() {
     throw new Error("먼저 로그인하세요.");
   }
 
+  if (isGuestAppUser(profile)) {
+    throw new Error("게스트 모드는 클라우드 동기화를 사용하지 않습니다.");
+  }
+
   const supabase = getSupabaseBrowserClient();
   if (!supabase) {
     throw new Error("NEXT_PUBLIC_SUPABASE_URL 또는 NEXT_PUBLIC_SUPABASE_ANON_KEY가 없습니다.");
@@ -215,6 +224,8 @@ export async function pullCloudSnapshotToLocal() {
 
 export function queueCloudSync() {
   if (suppressAutoSync || !canUseStorage() || !isSupabaseConfigured()) return;
+  const profile = getActiveAppUser();
+  if (!profile || isGuestAppUser(profile)) return;
   if (syncTimer) clearTimeout(syncTimer);
 
   syncTimer = setTimeout(() => {

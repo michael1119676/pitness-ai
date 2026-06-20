@@ -20,6 +20,8 @@ const appUserKeys = {
 } as const;
 
 const accentPool = ["mint", "sky", "coral"] as const;
+const guestAppUserId = "guest-reviewer";
+export const appUserChangeEvent = "adfc-active-user-changed";
 
 function canUseStorage() {
   return typeof window !== "undefined" && Boolean(window.localStorage);
@@ -44,9 +46,13 @@ export function isAccountAuthUser(user: User | null | undefined): user is User {
   return Boolean(user?.email) && user?.is_anonymous !== true;
 }
 
+export function isGuestAppUser(user: AppUser | null | undefined) {
+  return user?.id === guestAppUserId;
+}
+
 function emitUserChange() {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new Event("adfc-active-user-changed"));
+  window.dispatchEvent(new Event(appUserChangeEvent));
 }
 
 function saveAppUsers(users: AppUser[]) {
@@ -133,6 +139,29 @@ export function activateAppUserFromAuth(user: User, preferredName = "") {
   saveAppUsers(nextUsers);
   window.localStorage.setItem(appUserKeys.activeUser, nextUser.id);
   migrateExistingDataToUser(nextUser.id, previousActiveUserId);
+  emitUserChange();
+  return nextUser;
+}
+
+export function activateGuestAppUser() {
+  if (!canUseStorage()) return null;
+
+  const users = loadAppUsers();
+  const existing = users.find((item) => item.id === guestAppUserId);
+  const nextUser: AppUser = {
+    id: guestAppUserId,
+    email: null,
+    name: existing?.name ?? "검증 게스트",
+    accent: existing?.accent ?? "sky",
+    createdAt: existing?.createdAt ?? new Date().toISOString()
+  };
+  const nextUsers = [nextUser, ...users.filter((item) => item.id !== guestAppUserId)].slice(
+    0,
+    maxAppUsers
+  );
+
+  saveAppUsers(nextUsers);
+  window.localStorage.setItem(appUserKeys.activeUser, nextUser.id);
   emitUserChange();
   return nextUser;
 }

@@ -17,9 +17,12 @@ import {
 import { useEffect, useState } from "react";
 import {
   activateAppUserFromAuth,
+  appUserChangeEvent,
   clearActiveAppUser,
+  getActiveAppUser,
   getUserInitial,
   isAccountAuthUser,
+  isGuestAppUser,
   type AppUser
 } from "@/lib/app-users";
 import { getSupabaseBrowserClient } from "@/lib/supabase-client";
@@ -71,6 +74,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
 
     const refresh = async () => {
+      const localUser = getActiveAppUser();
+      if (isGuestAppUser(localUser)) {
+        if (isMounted) setActiveUser(localUser);
+        return;
+      }
+
       if (!supabase) {
         goToLogin();
         return;
@@ -80,7 +89,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       const authUser = data.session?.user ?? null;
       if (!isAccountAuthUser(authUser)) {
         await supabase.auth.signOut();
-        goToLogin();
+        const fallbackUser = getActiveAppUser();
+        if (isGuestAppUser(fallbackUser)) {
+          if (isMounted) setActiveUser(fallbackUser);
+        } else {
+          goToLogin();
+        }
         return;
       }
 
@@ -92,7 +106,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const authListener = supabase?.auth.onAuthStateChange((_event, session) => {
       if (!isAccountAuthUser(session?.user)) {
         if (session?.user) void supabase.auth.signOut();
-        goToLogin();
+        const fallbackUser = getActiveAppUser();
+        if (isGuestAppUser(fallbackUser)) {
+          if (isMounted) setActiveUser(fallbackUser);
+        } else {
+          goToLogin();
+        }
         return;
       }
       const user = activateAppUserFromAuth(session.user);
@@ -103,10 +122,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       void refresh();
     };
     window.addEventListener("storage", handleUserChange);
+    window.addEventListener(appUserChangeEvent, handleUserChange);
     return () => {
       isMounted = false;
       authListener?.data.subscription.unsubscribe();
       window.removeEventListener("storage", handleUserChange);
+      window.removeEventListener(appUserChangeEvent, handleUserChange);
     };
   }, [isLoginRoute, router]);
 
@@ -176,15 +197,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <details className="group relative">
               <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-semibold text-slate-700 shadow-soft marker:hidden">
                 <Menu size={17} className="md:hidden" aria-hidden />
-              <span className="grid size-7 place-items-center rounded-md bg-mint text-xs font-bold text-white">
-                {getUserInitial(activeUser.name)}
-              </span>
+                <span className="grid size-7 place-items-center rounded-md bg-mint text-xs font-bold text-white">
+                  {getUserInitial(activeUser.name)}
+                </span>
                 <span className="hidden max-w-24 truncate md:inline">{activeUser.name}</span>
               </summary>
               <div className="absolute right-0 mt-2 w-64 overflow-hidden rounded-md border border-line bg-white shadow-soft">
                 <div className="border-b border-line px-3 py-3">
                   <p className="truncate text-sm font-semibold">{activeUser.name}</p>
-                  <p className="truncate text-xs text-slate-500">{activeUser.email ?? "로그인됨"}</p>
+                  <p className="truncate text-xs text-slate-500">
+                    {activeUser.email ?? (isGuestAppUser(activeUser) ? "검증 모드" : "로그인됨")}
+                  </p>
                 </div>
                 <div className="grid p-1">
                   {utilityLinks.map((item) => {
