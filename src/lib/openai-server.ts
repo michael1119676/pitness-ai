@@ -7,11 +7,16 @@ import {
 } from "@/lib/daily-planning";
 
 const timeoutMs = 20000;
+const defaultOpenAiModel = "gpt-5.5";
 
 function getClient() {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
   return new OpenAI({ apiKey });
+}
+
+function getModel() {
+  return process.env.OPENAI_MODEL?.trim() || defaultOpenAiModel;
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms = timeoutMs) {
@@ -46,21 +51,13 @@ function parseJson<T>(value: string): T {
 export async function getTrainingFocusDecision(context: DailyTrainingContext) {
   const fallback = generateFallbackTrainingDecision(context);
   const client = getClient();
-  const model = process.env.OPENAI_MODEL;
+  const model = getModel();
 
   if (!client) {
     return {
       decision: fallback,
       source: "fallback" as const,
       message: "OPENAI_API_KEY가 없어 로컬 fallback 플래너를 사용했습니다."
-    };
-  }
-
-  if (!model) {
-    return {
-      decision: fallback,
-      source: "fallback" as const,
-      message: "OPENAI_MODEL이 없어 로컬 fallback 플래너를 사용했습니다."
     };
   }
 
@@ -135,7 +132,7 @@ export async function getShortCoachJson({
   fallback: { summary: string; actions: string[]; fallbackUsed: boolean };
 }) {
   const client = getClient();
-  const model = process.env.OPENAI_MODEL;
+  const model = getModel();
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -147,7 +144,7 @@ export async function getShortCoachJson({
     }
   } as const;
 
-  if (!client || !model) return fallback;
+  if (!client) return fallback;
 
   try {
     const response = await withSingleRetry(() =>
