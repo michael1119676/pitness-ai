@@ -227,7 +227,7 @@ export function TodayDashboard() {
   const { checkIn } = state;
   const { decision, plan, context } = snapshot;
   const latestBody = context.inBodyTrend.latest;
-  const focus = summarizeFocusMuscles(decision);
+  const focus = plan.sessionTitle ?? summarizeFocusMuscles(decision);
   const reasons = decision.reasoningSummary.slice(0, 2);
   const primaryMetricGoal = metricGoals.find((goal) => goal.enabled && goal.priority === "primary") ?? metricGoals.find((goal) => goal.enabled);
   const goalProgress = primaryMetricGoal

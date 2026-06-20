@@ -1,6 +1,7 @@
 "use client";
 
 import { equipmentCatalog } from "@/lib/equipment-data";
+import { getLocalDateKey } from "@/lib/date";
 import type {
   BodyComposition,
   BodyGoalProfile,
@@ -10,6 +11,9 @@ import type {
   MealLog,
   NutritionProfile,
   UserSupplementProfile,
+  WorkoutSessionExerciseRecord,
+  WorkoutSessionRecord,
+  WorkoutSetRecord,
   WorkoutSetLog
 } from "@/lib/daily-types";
 import {
@@ -32,8 +36,8 @@ export const defaultSettings: UserSettings = {
 
 export const defaultBodyGoalProfile: BodyGoalProfile = {
   id: "default-body-goal",
-  mainBodyGoal: "aesthetic_v_taper",
-  priorityMuscles: ["side_delt", "rear_delt", "lats", "upper_back", "upper_chest"],
+  mainBodyGoal: "balanced_health",
+  priorityMuscles: [],
   avoidOverdevelopmentMuscles: [],
   targetBodyWeightKg: null,
   targetBodyFatPercentage: null,
@@ -119,6 +123,7 @@ export interface WorkoutUiSession {
   status: "idle" | "in_progress" | "completed";
   startedAt: string | null;
   completedAt: string | null;
+  activeSessionRecordId: string | null;
   planItemsSnapshot: WorkoutPlanItem[] | null;
   currentItemId: string | null;
   currentSetIndex: number;
@@ -164,7 +169,7 @@ export const emptyMealDraftState: MealDraftState = {
 };
 
 export function todayKey(date = new Date()) {
-  return date.toISOString().slice(0, 10);
+  return getLocalDateKey(date);
 }
 
 export function makeDefaultCheckIn(date = todayKey()): DailyCheckIn {
@@ -327,8 +332,8 @@ export function saveNutritionProfile(profile: NutritionProfile) {
 }
 
 export function loadMealLogs(date = todayKey()) {
-  return loadJson<MealLog[]>(localStoreKeys.mealLogs, []).filter((meal) =>
-    meal.loggedAt.startsWith(date)
+  return loadJson<MealLog[]>(localStoreKeys.mealLogs, []).filter(
+    (meal) => todayKey(new Date(meal.loggedAt)) === date
   );
 }
 
@@ -361,12 +366,145 @@ export function saveWorkoutLogs(logs: WorkoutSetLog[]) {
   saveJson(localStoreKeys.workoutLogs, logs);
 }
 
+function lbsToKg(value: number | null | undefined) {
+  return value === null || value === undefined
+    ? null
+    : Math.round(value * 0.453592 * 10) / 10;
+}
+
+export function loadWorkoutSessionRecords() {
+  return loadJson<WorkoutSessionRecord[]>(localStoreKeys.workoutSessions, []);
+}
+
+export function saveWorkoutSessionRecords(records: WorkoutSessionRecord[]) {
+  saveJson(localStoreKeys.workoutSessions, records);
+}
+
+export function loadWorkoutSessionExerciseRecords() {
+  return loadJson<WorkoutSessionExerciseRecord[]>(localStoreKeys.workoutSessionExercises, []);
+}
+
+export function saveWorkoutSessionExerciseRecords(records: WorkoutSessionExerciseRecord[]) {
+  saveJson(localStoreKeys.workoutSessionExercises, records);
+}
+
+export function loadWorkoutSetRecords() {
+  return loadJson<WorkoutSetRecord[]>(localStoreKeys.workoutSets, []);
+}
+
+export function saveWorkoutSetRecords(records: WorkoutSetRecord[]) {
+  saveJson(localStoreKeys.workoutSets, records);
+}
+
+export function migrateWorkoutLogsToSessionRecords() {
+  const sourceLogs = loadWorkoutLogs();
+  const migratedIds = new Set(loadJson<string[]>(localStoreKeys.workoutLogMigration, []));
+  const pending = sourceLogs.filter((log) => !migratedIds.has(log.id));
+  if (pending.length === 0) {
+    return {
+      sessions: loadWorkoutSessionRecords(),
+      exercises: loadWorkoutSessionExerciseRecords(),
+      sets: loadWorkoutSetRecords(),
+      migratedCount: 0
+    };
+  }
+
+  const sessions = loadWorkoutSessionRecords();
+  const exercises = loadWorkoutSessionExerciseRecords();
+  const sets = loadWorkoutSetRecords();
+  const sessionsByDate = new Map(sessions.map((session) => [session.id, session]));
+  const exerciseByKey = new Map(exercises.map((exercise) => [`${exercise.sessionId}:${exercise.exerciseId}`, exercise]));
+
+  pending
+    .slice()
+    .sort((a, b) => a.performedAt.localeCompare(b.performedAt))
+    .forEach((log) => {
+      const localDate = todayKey(new Date(log.performedAt));
+      const sessionId = `migrated-${localDate}`;
+      let session = sessionsByDate.get(sessionId);
+      if (!session) {
+        session = {
+          id: sessionId,
+          localDate,
+          status: "completed",
+          startedAt: log.performedAt,
+          completedAt: log.performedAt,
+          durationSeconds: null,
+          planRevisionId: null,
+          sessionTitle: "이전 운동 기록",
+          focusMuscles: [],
+          exerciseIds: [],
+          totalWorkingSets: 0,
+          completedWorkingSets: 0,
+          totalVolumeKg: 0,
+          notes: "v1 세트 로그에서 자동 변환됨"
+        };
+        sessions.push(session);
+        sessionsByDate.set(sessionId, session);
+      }
+
+      const exerciseKey = `${sessionId}:${log.exerciseId}`;
+      let sessionExercise = exerciseByKey.get(exerciseKey);
+      if (!sessionExercise) {
+        sessionExercise = {
+          id: `migrated-exercise-${localDate}-${log.exerciseId}`,
+          sessionId,
+          exerciseId: log.exerciseId,
+          order: session.exerciseIds.length + 1,
+          plannedSets: 0,
+          plannedRepMin: 0,
+          plannedRepMax: 0,
+          plannedRestSeconds: 0
+        };
+        exercises.push(sessionExercise);
+        exerciseByKey.set(exerciseKey, sessionExercise);
+        session.exerciseIds = [...session.exerciseIds, log.exerciseId];
+      }
+
+      const exerciseSetCount = sets.filter((set) => set.sessionExerciseId === sessionExercise.id).length;
+      sets.push({
+        id: `migrated-set-${log.id}`,
+        sessionId,
+        sessionExerciseId: sessionExercise.id,
+        exerciseId: log.exerciseId,
+        setIndex: exerciseSetCount + 1,
+        setType: "working",
+        targetWeightKg: null,
+        actualWeightKg: lbsToKg(log.weight),
+        targetReps: null,
+        actualReps: log.reps,
+        rir: log.rir,
+        rpe: log.rpe,
+        restSeconds: null,
+        completedAt: log.wasCompleted ? log.performedAt : null,
+        wasCompleted: log.wasCompleted,
+        wasSkipped: log.wasSkipped,
+        notes: log.notes
+      });
+
+      session.totalWorkingSets += 1;
+      session.completedWorkingSets += log.wasCompleted ? 1 : 0;
+      session.totalVolumeKg += log.wasCompleted ? (lbsToKg(log.weight) ?? 0) * log.reps : 0;
+      session.startedAt = session.startedAt < log.performedAt ? session.startedAt : log.performedAt;
+      session.completedAt = !session.completedAt || session.completedAt > log.performedAt ? session.completedAt : log.performedAt;
+      migratedIds.add(log.id);
+    });
+
+  saveWorkoutSessionRecords(sessions);
+  saveWorkoutSessionExerciseRecords(exercises);
+  saveWorkoutSetRecords(sets);
+  saveJson(localStoreKeys.workoutLogMigration, Array.from(migratedIds));
+
+  return { sessions, exercises, sets, migratedCount: pending.length };
+}
+
 export function makeDefaultWorkoutSession(date = todayKey()): WorkoutUiSession {
   return {
     date,
     status: "idle",
     startedAt: null,
     completedAt: null,
+    activeSessionRecordId: null,
     planItemsSnapshot: null,
     currentItemId: null,
     currentSetIndex: 1,

@@ -9,6 +9,7 @@ import type {
   WorkoutSetLog
 } from "@/lib/daily-types";
 import { calculateBodyGoalProgress } from "@/lib/body-goals";
+import { getLocalDateKey, getYesterdayLocalDateKey } from "@/lib/date";
 import {
   buildDailyTrainingContext,
   generateFallbackTrainingDecision,
@@ -19,6 +20,12 @@ import { exerciseCatalog } from "@/lib/exercise-data";
 import { getInBodyTrendSummary, parseInBodyCsv } from "@/lib/inbody";
 import { calculateDailyNutritionPlan } from "@/lib/nutrition";
 import { calculateSessionVolumePrescription, defaultPersonalTrainingStyleProfile } from "@/lib/training-style";
+import { localStoreKeys } from "@/lib/local-store-keys";
+import {
+  loadWorkoutSessionRecords,
+  loadWorkoutSetRecords,
+  migrateWorkoutLogsToSessionRecords
+} from "@/lib/local-store";
 import type { EquipmentPreferenceMode, UserSettings } from "@/lib/types";
 import { generateWorkoutPlanFromDecision } from "@/lib/workout-engine";
 
@@ -478,6 +485,188 @@ function scenario10() {
   assert.equal(plan.items.some((item) => item.equipment.some((equipment) => ["barbell", "dumbbell"].includes(equipment.equipment_type))), false);
 }
 
+function pushDecisionWithBadAiSlots(): ReturnType<typeof generateFallbackTrainingDecision> {
+  return {
+    sessionMode: "strength",
+    sessionTitle: "가슴 · 삼두 · 전면 어깨",
+    selectedMuscles: [
+      { muscle: "chest", priority: 1, targetEffectiveSets: 8, reason: "push focus" },
+      { muscle: "triceps", priority: 2, targetEffectiveSets: 6, reason: "push focus" },
+      { muscle: "front_delt", priority: 3, targetEffectiveSets: 4, reason: "push focus" }
+    ],
+    excludedMuscles: [],
+    movementSlots: [
+      {
+        slotId: "chest-press",
+        primaryMuscle: "chest",
+        targetRegion: "mid_chest",
+        movementFamily: "horizontal_push",
+        targetSets: 4,
+        repMin: 8,
+        repMax: 12,
+        intensity: "normal",
+        priority: 1,
+        reason: "chest"
+      },
+      {
+        slotId: "front-delt-press",
+        primaryMuscle: "front_delt",
+        targetRegion: "front_delt",
+        movementFamily: "vertical_push",
+        targetSets: 3,
+        repMin: 8,
+        repMax: 12,
+        intensity: "normal",
+        priority: 2,
+        reason: "front delt"
+      },
+      {
+        slotId: "triceps",
+        primaryMuscle: "triceps",
+        targetRegion: "triceps",
+        movementFamily: "elbow_extension",
+        targetSets: 3,
+        repMin: 10,
+        repMax: 15,
+        intensity: "normal",
+        priority: 3,
+        reason: "triceps"
+      },
+      {
+        slotId: "bad-biceps",
+        primaryMuscle: "biceps",
+        targetRegion: "biceps",
+        movementFamily: "elbow_flexion",
+        targetSets: 3,
+        repMin: 10,
+        repMax: 15,
+        intensity: "normal",
+        priority: 4,
+        reason: "bad ai"
+      },
+      {
+        slotId: "bad-rear-delt",
+        primaryMuscle: "rear_delt",
+        targetRegion: "rear_delt",
+        movementFamily: "fly",
+        targetSets: 3,
+        repMin: 12,
+        repMax: 20,
+        intensity: "normal",
+        priority: 5,
+        reason: "bad ai"
+      }
+    ],
+    overallIntensity: "normal",
+    volumeMultiplier: 1,
+    estimatedDurationMinutes: 70,
+    evidenceKeys: [],
+    reasoningSummary: [],
+    warnings: [],
+    confidence: "medium",
+    requiresUserConfirmation: false,
+    fallbackUsed: false
+  };
+}
+
+function scenario11() {
+  const context = buildContext({
+    dailyCheckIn: checkIn({ availableTimeMinutes: 70 }),
+    bodyGoal: goal({ mainBodyGoal: "balanced_health", priorityMuscles: [] }),
+    equipmentPreference: "free_weight_allowed"
+  });
+  const decision = validateDailyTrainingDecision(pushDecisionWithBadAiSlots(), context);
+  assert.equal(decision.movementSlots.some((slot) => ["biceps", "rear_delt", "side_delt", "lats", "upper_back", "mid_back"].includes(slot.primaryMuscle)), false);
+  assert.ok(decision.movementSlots.some((slot) => slot.primaryMuscle === "front_delt" && slot.movementFamily === "vertical_push"));
+  const plan = generateWorkoutPlanFromDecision({
+    decision,
+    input: {
+      workoutType: "full_body",
+      availableMinutes: 70,
+      intensity: "normal",
+      equipmentPreference: "free_weight_allowed",
+      soreMuscles: [],
+      temporarilyUnavailableEquipmentIds: [],
+      avoidedEquipmentIds: [],
+      recentExerciseIds: []
+    },
+    forbiddenMuscles: context.hardConstraints.forbiddenMuscles,
+    forbiddenMovementFamilies: context.hardConstraints.forbiddenMovementFamilies
+  });
+  const banned = new Set(["biceps", "rear_delt", "side_delt", "lats", "upper_back", "mid_back", "lower_back"]);
+  assert.equal(plan.items.some((item) => banned.has(item.exercise.primary_muscle) || banned.has(item.exercise.target_region)), false);
+  assert.equal(/이두|후면|측면|등/.test(plan.sessionTitle ?? ""), false);
+  assert.ok((plan.sessionTitle ?? "").includes("가슴") || (plan.sessionTitle ?? "").includes("삼두") || (plan.sessionTitle ?? "").includes("전면"));
+}
+
+function scenario12() {
+  const context = buildContext({
+    dailyCheckIn: checkIn({ availableTimeMinutes: 70 }),
+    equipmentPreference: "machine_cable_priority"
+  });
+  const decision = validateDailyTrainingDecision(pushDecisionWithBadAiSlots(), context);
+  const plan = generateWorkoutPlanFromDecision({
+    decision,
+    input: {
+      workoutType: "full_body",
+      availableMinutes: 70,
+      intensity: "normal",
+      equipmentPreference: "machine_cable_priority",
+      soreMuscles: [],
+      temporarilyUnavailableEquipmentIds: [],
+      avoidedEquipmentIds: [],
+      recentExerciseIds: []
+    },
+    forbiddenMuscles: [],
+    forbiddenMovementFamilies: []
+  });
+  assert.equal(plan.items.some((item) => item.equipment.some((equipment) => ["barbell", "dumbbell"].includes(equipment.equipment_type))), false);
+}
+
+function scenario13() {
+  assert.equal(getLocalDateKey(new Date("2026-06-19T15:10:00Z")), "2026-06-20");
+  assert.equal(getYesterdayLocalDateKey(new Date("2026-06-19T15:10:00Z")), "2026-06-19");
+}
+
+function installMemoryStorage() {
+  const store = new Map<string, string>();
+  const localStorage = {
+    get length() {
+      return store.size;
+    },
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+    clear: () => {
+      store.clear();
+    }
+  };
+  Object.defineProperty(globalThis, "window", {
+    value: { localStorage, dispatchEvent: () => true },
+    configurable: true
+  });
+  return localStorage;
+}
+
+function scenario14() {
+  const storage = installMemoryStorage();
+  storage.setItem(localStoreKeys.workoutLogs, JSON.stringify([
+    setLog(900, "ex-selectorized-chest-press", "eq-selectorized-chest-press", 0),
+    setLog(901, "ex-cable-triceps-pushdown", "eq-cable-stack", 0, { weight: 50, reps: 12 })
+  ]));
+  const first = migrateWorkoutLogsToSessionRecords();
+  const second = migrateWorkoutLogsToSessionRecords();
+  assert.equal(first.migratedCount, 2);
+  assert.equal(second.migratedCount, 0);
+  assert.equal(loadWorkoutSessionRecords().length, 1);
+  assert.equal(loadWorkoutSetRecords().length, 2);
+}
+
 scenario1();
 scenario2();
 scenario3();
@@ -488,5 +677,9 @@ scenario7();
 scenario8();
 scenario9();
 scenario10();
+scenario11();
+scenario12();
+scenario13();
+scenario14();
 
 console.log("core scenarios passed");

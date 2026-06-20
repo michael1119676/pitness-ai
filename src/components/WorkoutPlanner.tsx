@@ -2,8 +2,15 @@
 
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Ban, Check, Dumbbell, RefreshCcw, Timer, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { AvoidableBodyPart, WorkoutSetLog } from "@/lib/daily-types";
+import type {
+  AvoidableBodyPart,
+  WorkoutSessionExerciseRecord,
+  WorkoutSessionRecord,
+  WorkoutSetLog,
+  WorkoutSetRecord
+} from "@/lib/daily-types";
 import { formatBodyPart, toggleBodyPart } from "@/lib/daily-planning";
+import { deriveFinalSessionTitle, deriveSessionFocusPolicy } from "@/lib/focus-policy";
 import {
   buildDailyPlanSnapshot,
   buildDailyPlanSnapshotFromRevision,
@@ -13,11 +20,17 @@ import {
 import {
   appendDailyPlanRevision,
   loadLatestDailyPlanRevision,
+  loadWorkoutSessionExerciseRecords,
+  loadWorkoutSessionRecords,
   loadWorkoutSession,
+  loadWorkoutSetRecords,
   saveDailyCheckIn,
   saveEquipment,
+  saveWorkoutSessionExerciseRecords,
+  saveWorkoutSessionRecords,
   saveWorkoutLogs,
   saveWorkoutSession,
+  saveWorkoutSetRecords,
   type WorkoutUiSession
 } from "@/lib/local-store";
 import { countPlanSets, countPlanWarmupSets, formatMinutes, intensityLabels, summarizeFocusMuscles } from "@/lib/mobile-ui";
@@ -40,6 +53,28 @@ function nullable(value: string) {
   if (!value.trim()) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function poundsToKg(value: number | null | undefined) {
+  return value === null || value === undefined
+    ? null
+    : Math.round(value * 0.453592 * 10) / 10;
+}
+
+function summarizeSessionFromSets(
+  session: WorkoutSessionRecord,
+  sets: WorkoutSetRecord[]
+): WorkoutSessionRecord {
+  const sessionSets = sets.filter((set) => set.sessionId === session.id && set.setType === "working");
+  return {
+    ...session,
+    totalWorkingSets: sessionSets.length,
+    completedWorkingSets: sessionSets.filter((set) => set.wasCompleted).length,
+    totalVolumeKg: Math.round(sessionSets.reduce((sum, set) =>
+      sum + (set.wasCompleted ? (set.actualWeightKg ?? 0) * (set.actualReps ?? 0) : 0),
+      0
+    ) * 10) / 10
+  };
 }
 
 function defaultDraft(item: WorkoutPlanItem) {
@@ -68,6 +103,7 @@ export function WorkoutPlanner() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [items, setItems] = useState<WorkoutPlanItem[]>([]);
   const [session, setSession] = useState<WorkoutUiSession | null>(null);
+  const [setRecords, setSetRecords] = useState<WorkoutSetRecord[]>([]);
   const [message, setMessage] = useState("");
   const [replacement, setReplacement] = useState<{
     item: WorkoutPlanItem;
@@ -89,6 +125,7 @@ export function WorkoutPlanner() {
     setSnapshot(built);
     setItems(lockedItems);
     setSession(loadedSession);
+    setSetRecords(loadWorkoutSetRecords());
   }, []);
 
   useEffect(() => {
@@ -102,14 +139,19 @@ export function WorkoutPlanner() {
   );
 
   const progress = useMemo(() => {
-    const total = countPlanSets(items);
-    const completed = completedLogs.length;
+    const activeSets = session?.activeSessionRecordId
+      ? setRecords.filter((set) => set.sessionId === session.activeSessionRecordId && set.setType === "working")
+      : [];
+    const total = activeSets.length > 0 ? activeSets.length : countPlanSets(items);
+    const completed = activeSets.length > 0
+      ? activeSets.filter((set) => set.wasCompleted).length
+      : completedLogs.length;
     return {
       completed,
       total,
       percent: total === 0 ? 0 : Math.min(100, Math.round((completed / total) * 100))
     };
-  }, [completedLogs.length, items]);
+  }, [completedLogs.length, items, session?.activeSessionRecordId, setRecords]);
 
   const currentIndex = useMemo(() => {
     if (!session?.currentItemId) return 0;
@@ -127,6 +169,7 @@ export function WorkoutPlanner() {
   function withPlanItemsSnapshot(nextSession: WorkoutUiSession, planItems: WorkoutPlanItem[]) {
     return {
       ...nextSession,
+      activeSessionRecordId: nextSession.status === "idle" ? null : nextSession.activeSessionRecordId,
       planItemsSnapshot: nextSession.status === "idle" ? null : planItems
     };
   }
@@ -149,13 +192,97 @@ export function WorkoutPlanner() {
     });
   }
 
+  function createWorkoutSessionRecords(startedAt: string) {
+    if (!state || !snapshot) return null;
+    const sessionId = makeId("session");
+    const sessionExercises: WorkoutSessionExerciseRecord[] = items.map((item, index) => ({
+      id: makeId(`session-exercise-${index + 1}`),
+      sessionId,
+      exerciseId: item.exercise.id,
+      order: index + 1,
+      plannedSets: item.sets,
+      plannedRepMin: item.rep_min,
+      plannedRepMax: item.rep_max,
+      plannedRestSeconds: item.rest_seconds
+    }));
+    const plannedSets = sessionExercises.flatMap((sessionExercise, exerciseIndex) => {
+      const item = items[exerciseIndex];
+      const warmups: WorkoutSetRecord[] = (item.warmupSets ?? []).map((warmup, index) => ({
+        id: makeId(`warmup-${exerciseIndex + 1}-${index + 1}`),
+        sessionId,
+        sessionExerciseId: sessionExercise.id,
+        exerciseId: item.exercise.id,
+        setIndex: index + 1,
+        setType: "warmup",
+        targetWeightKg: warmup.weightKg,
+        actualWeightKg: null,
+        targetReps: warmup.reps,
+        actualReps: null,
+        rir: null,
+        rpe: null,
+        restSeconds: item.rest_seconds,
+        completedAt: null,
+        wasCompleted: false,
+        wasSkipped: false,
+        notes: warmup.note
+      }));
+      const working: WorkoutSetRecord[] = Array.from({ length: item.sets }, (_, index) => ({
+        id: makeId(`working-${exerciseIndex + 1}-${index + 1}`),
+        sessionId,
+        sessionExerciseId: sessionExercise.id,
+        exerciseId: item.exercise.id,
+        setIndex: index + 1,
+        setType: "working",
+        targetWeightKg: poundsToKg(item.recommended_weight_lbs),
+        actualWeightKg: null,
+        targetReps: item.rep_max,
+        actualReps: null,
+        rir: null,
+        rpe: null,
+        restSeconds: item.rest_seconds,
+        completedAt: null,
+        wasCompleted: false,
+        wasSkipped: false,
+        notes: ""
+      }));
+      return [...warmups, ...working];
+    });
+    const sessionRecord: WorkoutSessionRecord = {
+      id: sessionId,
+      localDate: state.date,
+      status: "in_progress",
+      startedAt,
+      completedAt: null,
+      durationSeconds: null,
+      planRevisionId: null,
+      sessionTitle: deriveFinalSessionTitle({ items }, deriveSessionFocusPolicy(snapshot.decision, snapshot.context)),
+      focusMuscles: snapshot.plan.focusMuscles ?? [],
+      exerciseIds: items.map((item) => item.exercise.id),
+      totalWorkingSets: plannedSets.filter((set) => set.setType === "working").length,
+      completedWorkingSets: 0,
+      totalVolumeKg: 0,
+      notes: ""
+    };
+    const nextSessions = [...loadWorkoutSessionRecords(), sessionRecord];
+    const nextExercises = [...loadWorkoutSessionExerciseRecords(), ...sessionExercises];
+    const nextSets = [...loadWorkoutSetRecords(), ...plannedSets];
+    saveWorkoutSessionRecords(nextSessions);
+    saveWorkoutSessionExerciseRecords(nextExercises);
+    saveWorkoutSetRecords(nextSets);
+    setSetRecords(nextSets);
+    return sessionId;
+  }
+
   function startWorkout() {
     if (!state || !currentItem) return;
+    const startedAt = new Date().toISOString();
+    const activeSessionRecordId = createWorkoutSessionRecords(startedAt);
     persistSession({
       date: state.date,
       status: "in_progress",
-      startedAt: new Date().toISOString(),
+      startedAt,
       completedAt: null,
+      activeSessionRecordId,
       planItemsSnapshot: items,
       currentItemId: currentItem.id,
       currentSetIndex: 1,
@@ -166,10 +293,27 @@ export function WorkoutPlanner() {
 
   function endWorkout(completed = false) {
     if (!state || !session) return;
+    const completedAt = completed ? new Date().toISOString() : null;
+    if (session.activeSessionRecordId) {
+      const sessions = loadWorkoutSessionRecords();
+      const nextSessions = sessions.map((record) => {
+        if (record.id !== session.activeSessionRecordId) return record;
+        const durationSeconds = session.startedAt
+          ? Math.max(0, Math.round((Date.now() - new Date(session.startedAt).getTime()) / 1000))
+          : null;
+        return summarizeSessionFromSets({
+          ...record,
+          status: completed ? "completed" : "abandoned",
+          completedAt,
+          durationSeconds
+        }, setRecords);
+      });
+      saveWorkoutSessionRecords(nextSessions);
+    }
     persistSession(withPlanItemsSnapshot({
       ...session,
       status: completed ? "completed" : "idle",
-      completedAt: completed ? new Date().toISOString() : null,
+      completedAt,
       restEndsAt: null
     }, items));
     setMessage(completed ? "오늘 운동을 완료했습니다." : "운동을 종료했습니다. 기록은 저장되어 있습니다.");
@@ -205,7 +349,8 @@ export function WorkoutPlanner() {
         excludedExerciseIds: Array.from(excluded),
         avoidCurrentEquipment: intent === "unavailable",
         forbiddenMuscles: snapshot.context.hardConstraints.forbiddenMuscles,
-        forbiddenMovementFamilies: snapshot.context.hardConstraints.forbiddenMovementFamilies
+        forbiddenMovementFamilies: snapshot.context.hardConstraints.forbiddenMovementFamilies,
+        focusPolicy: deriveSessionFocusPolicy(snapshot.decision, snapshot.context)
       });
       if (!candidate) break;
       candidates.push(candidate);
@@ -317,6 +462,40 @@ export function WorkoutPlanner() {
     saveWorkoutLogs(allLogs);
     setState(nextState);
 
+    let nextSetRecords = setRecords;
+    if (session.activeSessionRecordId) {
+      const recordIndex = setRecords.findIndex((set) =>
+        set.sessionId === session.activeSessionRecordId
+        && set.exerciseId === currentItem.exercise.id
+        && set.setType === "working"
+        && set.setIndex === session.currentSetIndex
+      );
+      if (recordIndex >= 0) {
+        nextSetRecords = setRecords.map((set, index) =>
+          index === recordIndex
+            ? {
+              ...set,
+              actualWeightKg: poundsToKg(weight),
+              actualReps: reps,
+              rir,
+              rpe,
+              completedAt: log.performedAt,
+              wasCompleted: true,
+              wasSkipped: false
+            }
+            : set
+        );
+        saveWorkoutSetRecords(nextSetRecords);
+        setSetRecords(nextSetRecords);
+        const sessions = loadWorkoutSessionRecords();
+        saveWorkoutSessionRecords(sessions.map((record) =>
+          record.id === session.activeSessionRecordId
+            ? summarizeSessionFromSets(record, nextSetRecords)
+            : record
+        ));
+      }
+    }
+
     const nextSetIndex = session.currentSetIndex + 1;
     const restEndsAt = new Date(Date.now() + currentItem.rest_seconds * 1000).toISOString();
     if (nextSetIndex <= currentItem.sets) {
@@ -337,12 +516,28 @@ export function WorkoutPlanner() {
           draft: defaultDraft(nextItem)
         });
       } else {
-        persistSession({
+        if (session.activeSessionRecordId) {
+          const completedAt = new Date().toISOString();
+          const sessions = loadWorkoutSessionRecords();
+          saveWorkoutSessionRecords(sessions.map((record) =>
+            record.id === session.activeSessionRecordId
+              ? summarizeSessionFromSets({
+                ...record,
+                status: "completed",
+                completedAt,
+                durationSeconds: session.startedAt
+                  ? Math.max(0, Math.round((Date.now() - new Date(session.startedAt).getTime()) / 1000))
+                  : null
+              }, nextSetRecords)
+              : record
+          ));
+        }
+        persistSession(withPlanItemsSnapshot({
           ...session,
           status: "completed",
           completedAt: new Date().toISOString(),
           restEndsAt: null
-        });
+        }, items));
         setMessage("오늘 루틴을 모두 완료했습니다.");
       }
     }
@@ -358,7 +553,8 @@ export function WorkoutPlanner() {
     );
   }
 
-  const focus = summarizeFocusMuscles(snapshot.decision);
+  const focusPolicy = deriveSessionFocusPolicy(snapshot.decision, snapshot.context);
+  const focus = deriveFinalSessionTitle({ items }, focusPolicy) || snapshot.plan.sessionTitle || summarizeFocusMuscles(snapshot.decision);
 
   if (session.status === "in_progress" && currentItem) {
     const lastSet = getRecentSet(state.workoutLogs.filter((log) => !log.performedAt.startsWith(state.date)), currentItem);

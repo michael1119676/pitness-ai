@@ -12,6 +12,10 @@ import {
   type ScheduleConstraint,
   type WorkoutSetLog
 } from "@/lib/daily-types";
+import {
+  deriveSessionFocusPolicy,
+  slotMatchesFocusPolicy
+} from "@/lib/focus-policy";
 import { summarizeTrainingHistory } from "@/lib/history-analysis";
 import { getInBodyTrendSummary } from "@/lib/inbody";
 import { getNutritionStatus } from "@/lib/nutrition";
@@ -224,6 +228,16 @@ const slotTemplatesByPart: Record<
       movementFamily: "fly",
       repMin: 12,
       repMax: 20
+    }
+  ],
+  front_delt: [
+    {
+      label: "전면 어깨 프레스",
+      primaryMuscle: "front_delt",
+      targetRegion: "front_delt",
+      movementFamily: "vertical_push",
+      repMin: 8,
+      repMax: 12
     }
   ],
   upper_chest: [
@@ -699,6 +713,7 @@ export function validateMovementSlots(
 ): DailyTrainingDecision {
   const forbiddenMuscles = new Set(context.hardConstraints.forbiddenMuscles);
   const forbiddenMovementFamilies = new Set(context.hardConstraints.forbiddenMovementFamilies);
+  const policy = deriveSessionFocusPolicy(decision, context);
   const removedReasons: string[] = [];
   const movementSlots = decision.movementSlots
     .filter((slot) => {
@@ -708,11 +723,13 @@ export function validateMovementSlots(
           && relatedParts(slot.targetRegion).some((part) => forbiddenMuscles.has(part)));
       const forbiddenMovement = forbiddenMovementFamilies.has(slot.movementFamily);
       const available = hasCapabilityForSlot(context, slot);
+      const inFocus = slotMatchesFocusPolicy(slot, policy);
 
       if (touchesForbidden) removedReasons.push(`${formatBodyPart(slot.primaryMuscle)} 슬롯은 금지 부위와 겹쳐 제외했습니다.`);
       if (forbiddenMovement) removedReasons.push(`${slot.movementFamily} 패턴은 오늘 제외했습니다.`);
       if (!available) removedReasons.push(`${slot.movementFamily} 패턴은 현재 등록 기구로 실행할 수 없어 제외했습니다.`);
-      return !touchesForbidden && !forbiddenMovement && available;
+      if (!inFocus) removedReasons.push(`${formatBodyPart(slot.primaryMuscle)} 슬롯은 오늘 포커스 밖이라 제외했습니다.`);
+      return !touchesForbidden && !forbiddenMovement && available && inFocus;
     })
     .map((slot, index) => ({
       ...slot,
@@ -752,22 +769,30 @@ export function validateDailyTrainingDecision(
     warnings: Array.isArray(decision.warnings) ? decision.warnings : []
   };
   const validated = enforceHardConstraints(withRequiredDefaults, context);
+  const focusPolicy = deriveSessionFocusPolicy(validated, context);
+  const withFocusPolicy = {
+    ...validated,
+    primaryFocusMuscles: focusPolicy.primaryMuscles,
+    allowedAccessoryMuscles: focusPolicy.allowedAccessoryMuscles,
+    blockedMuscles: focusPolicy.blockedOutOfFocusMuscles,
+    sessionArchetype: focusPolicy.allowFullBodyCompletion ? "broad_focus" : "focused"
+  };
 
-  if (validated.movementSlots.length === 0 && context.trainingIntent === "train") {
+  if (withFocusPolicy.movementSlots.length === 0 && context.trainingIntent === "train") {
     return {
-      ...validated,
+      ...withFocusPolicy,
       sessionMode: "rest_recommended",
       sessionTitle: "실행 가능한 안전 루틴 없음",
       estimatedDurationMinutes: 0,
       warnings: unique([
-        ...validated.warnings,
+        ...withFocusPolicy.warnings,
         "금지 부위/기구 조건을 적용한 뒤 실행 가능한 슬롯이 없어 휴식을 권장합니다."
       ]),
       requiresUserConfirmation: true
     };
   }
 
-  return validated;
+  return withFocusPolicy;
 }
 
 function buildSlotForPart({
@@ -841,9 +866,11 @@ function allocateMovementSlots({
   targetExerciseCount: number;
   targetWorkingSetCount: number;
 }) {
-  const seedParts = selected.map((item) => item.muscle);
-  const accessoryParts = ["rear_delt", "side_delt", "biceps", "triceps", "upper_back", "abs"];
-  const slotParts = unique([...seedParts, ...accessoryParts])
+  const policy = deriveSessionFocusPolicy({
+    selectedMuscles: selected,
+    movementSlots: []
+  });
+  const slotParts = unique([...policy.primaryMuscles, ...policy.allowedAccessoryMuscles])
     .filter((part) => !context.hardConstraints.forbiddenMuscles.includes(part))
     .filter((part) => hasCapabilityForPart(context, part));
   const slots: DailyTrainingDecision["movementSlots"] = [];
@@ -866,6 +893,7 @@ function allocateMovementSlots({
         context
       });
       if (!slot) continue;
+      if (!slotMatchesFocusPolicy(slot, policy)) continue;
       const duplicate = slots.some(
         (item) =>
           item.primaryMuscle === slot.primaryMuscle
@@ -989,15 +1017,23 @@ export function generateFallbackTrainingDecision(
     targetExerciseCount: volumePrescription.targetExerciseCount,
     targetWorkingSetCount: volumePrescription.targetWorkingSetCount
   });
+  const focusPolicy = deriveSessionFocusPolicy({
+    selectedMuscles: selected,
+    movementSlots: slots
+  }, context);
 
   const title =
     selected.length > 0
-      ? `${selected.slice(0, 3).map((item) => formatBodyPart(item.muscle)).join("·")} 집중`
+      ? selected.slice(0, 3).map((item) => formatBodyPart(item.muscle)).join(" · ")
       : "회복 우선 세션";
 
   const decision: DailyTrainingDecision = {
     sessionMode,
     sessionTitle: title,
+    primaryFocusMuscles: focusPolicy.primaryMuscles,
+    allowedAccessoryMuscles: focusPolicy.allowedAccessoryMuscles,
+    blockedMuscles: focusPolicy.blockedOutOfFocusMuscles,
+    sessionArchetype: focusPolicy.allowFullBodyCompletion ? "broad_focus" : "focused",
     selectedMuscles: selected,
     excludedMuscles,
     movementSlots: slots,

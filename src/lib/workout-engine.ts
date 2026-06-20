@@ -1,7 +1,16 @@
 import { equipmentCatalog } from "@/lib/equipment-data";
 import { exerciseCatalog } from "@/lib/exercise-data";
+import {
+  deriveFinalSessionTitle,
+  derivePlanFocusMuscles,
+  deriveSessionFocusPolicy,
+  exerciseMatchesFocusPolicy,
+  slotMatchesFocusPolicy,
+  strictSlotEligibility,
+  validateFinalPlanAgainstFocus
+} from "@/lib/focus-policy";
 import { titleCase } from "@/lib/format";
-import type { DailyTrainingDecision, ExerciseModality, ExerciseRole, SessionVolumePrescription } from "@/lib/daily-types";
+import type { DailyTrainingDecision, ExerciseModality, ExerciseRole, SessionFocusPolicy, SessionVolumePrescription } from "@/lib/daily-types";
 import {
   calculateSessionVolumePrescription,
   defaultPersonalTrainingStyleProfile,
@@ -516,6 +525,10 @@ export function scoreExerciseForSlot(
     return { exercise, equipment: requiredEquipment, score: Number.NEGATIVE_INFINITY, reasons };
   }
 
+  if (!strictSlotEligibility(exercise, slot)) {
+    return { exercise, equipment: requiredEquipment, score: Number.NEGATIVE_INFINITY, reasons };
+  }
+
   if (slot.primary_muscle) {
     if (exercise.primary_muscle === slot.primary_muscle) {
       score += 40;
@@ -730,6 +743,8 @@ export function validateAndCompleteSessionPlan(input: {
   volumePrescription: SessionVolumePrescription;
   availableExercises: Exercise[];
   equipment?: Equipment[];
+  planInput?: GenerateWorkoutInput;
+  focusPolicy?: SessionFocusPolicy;
   hardConstraints: {
     forbiddenMuscles: string[];
     forbiddenMovementFamilies: MovementFamily[];
@@ -737,29 +752,22 @@ export function validateAndCompleteSessionPlan(input: {
 }): WorkoutPlan {
   const equipment = input.equipment ?? equipmentCatalog;
   const selectedIds = new Set(input.draftPlan.items.map((item) => item.exercise.id));
-  const focusMuscles = input.draftPlan.focusMuscles ?? [];
   const baseInput: GenerateWorkoutInput = {
     ...emptyWorkoutInput,
+    ...(input.planInput ?? {}),
     workoutType: "full_body",
     availableMinutes: input.volumePrescription.targetDurationMinutes,
-    intensity: input.draftPlan.intensity,
-    equipmentPreference:
-      defaultPersonalTrainingStyleProfile.equipmentMixMode === "machine_only"
-        ? "machine_only"
-        : "free_weight_allowed",
-    soreMuscles: [],
-    temporarilyUnavailableEquipmentIds: [],
-    avoidedEquipmentIds: [],
-    recentExerciseIds: []
+    intensity: input.draftPlan.intensity
   };
-  let items = withWarmups(input.draftPlan.items);
-  const completionSlots: WorkoutSlot[] = [
-    ...workoutSlots.pull,
-    ...workoutSlots.push,
-    ...workoutSlots.legs,
-    ...workoutSlots.upper,
-    ...workoutSlots.full_body
-  ];
+  const focusPolicy = input.focusPolicy;
+  let items = withWarmups(
+    input.draftPlan.items.filter((item) =>
+      !focusPolicy
+      || (exerciseMatchesFocusPolicy(item.exercise, focusPolicy) && slotMatchesFocusPolicy(item.slot, focusPolicy))
+    )
+  );
+  const completionSlots: WorkoutSlot[] = input.draftPlan.skippedSlots
+    .filter((slot) => !focusPolicy || slotMatchesFocusPolicy(slot, focusPolicy));
 
   while (
     items.length < input.volumePrescription.minExerciseCount
@@ -779,9 +787,10 @@ export function validateAndCompleteSessionPlan(input: {
           input.hardConstraints.forbiddenMovementFamilies
         )
       )
+      .filter((exercise) => !focusPolicy || exerciseMatchesFocusPolicy(exercise, focusPolicy))
       .map((exercise) => scoreExerciseForSlot(exercise, slot, equipment, baseInput))
       .filter((result) => Number.isFinite(result.score))
-      .sort((a, b) => candidateScoreForCompletion(b, focusMuscles, items) - candidateScoreForCompletion(a, focusMuscles, items))[0];
+      .sort((a, b) => candidateScoreForCompletion(b, input.draftPlan.focusMuscles ?? [], items) - candidateScoreForCompletion(a, input.draftPlan.focusMuscles ?? [], items))[0];
     if (!candidate || candidate.score < 35) break;
 
     selectedIds.add(candidate.exercise.id);
@@ -809,25 +818,32 @@ export function validateAndCompleteSessionPlan(input: {
   let setIndex = 0;
   while (totalWorkingSets(items) < input.volumePrescription.minWorkingSetCount && items.length > 0) {
     const item = items[setIndex % items.length];
+    if (item.sets >= 5) {
+      setIndex += 1;
+      if (setIndex > items.length * 5) break;
+      continue;
+    }
     item.sets = clamp(item.sets + 1, 2, 5);
     setIndex += 1;
   }
 
-  const hasFreeWeightCandidate = input.availableExercises.some((exercise) =>
+  const canUseFreeWeight =
+    baseInput.equipmentPreference !== "machine_only"
+    && input.volumePrescription.targetDurationMinutes >= 45;
+  const hasFreeWeightCandidate = canUseFreeWeight && input.availableExercises.some((exercise) =>
     exercise.equipment_type_preference.some((type) => ["barbell", "dumbbell"].includes(type))
+    && (!focusPolicy || exerciseMatchesFocusPolicy(exercise, focusPolicy))
   );
   if (
     hasFreeWeightCandidate
     && !items.some(isFreeWeightItem)
-    && input.volumePrescription.targetDurationMinutes >= 45
   ) {
-    const replacementSlot = completionSlots.find((slot) =>
-      ["horizontal_push", "horizontal_pull", "vertical_push", "elbow_flexion", "elbow_extension"].includes(slot.movement_family)
-    );
-    const freeCandidate = replacementSlot
-      ? input.availableExercises
+    const replacement = items
+      .map((item, replaceIndex) => {
+        const freeCandidate = input.availableExercises
           .filter((exercise) => !selectedIds.has(exercise.id))
           .filter((exercise) => exercise.equipment_type_preference.some((type) => ["barbell", "dumbbell"].includes(type)))
+          .filter((exercise) => !focusPolicy || exerciseMatchesFocusPolicy(exercise, focusPolicy))
           .filter((exercise) =>
             !exerciseTouchesForbidden(
               exercise,
@@ -835,16 +851,19 @@ export function validateAndCompleteSessionPlan(input: {
               input.hardConstraints.forbiddenMovementFamilies
             )
           )
-          .map((exercise) => scoreExerciseForSlot(exercise, replacementSlot, equipment, baseInput))
+          .map((exercise) => scoreExerciseForSlot(exercise, item.slot, equipment, baseInput))
           .filter((result) => Number.isFinite(result.score))
-          .sort((a, b) => b.score - a.score)[0]
-      : null;
-    if (freeCandidate && freeCandidate.score >= 35 && items.length > 0) {
-      const replaceIndex = Math.max(0, items.length - 1);
+          .sort((a, b) => b.score - a.score)[0];
+        return freeCandidate ? { replaceIndex, freeCandidate, slot: item.slot } : null;
+      })
+      .filter((item): item is { replaceIndex: number; freeCandidate: ExerciseScore; slot: WorkoutSlot } => Boolean(item))
+      .sort((a, b) => b.freeCandidate.score - a.freeCandidate.score)[0];
+    if (replacement && replacement.freeCandidate.score >= 35) {
+      const { replaceIndex, freeCandidate, slot } = replacement;
       items[replaceIndex] = {
         ...items[replaceIndex],
-        id: `${replacementSlot!.id}-${freeCandidate.exercise.id}`,
-        slot: replacementSlot!,
+        id: `${slot.id}-${freeCandidate.exercise.id}`,
+        slot,
         exercise: freeCandidate.exercise,
         equipment: freeCandidate.equipment,
         score: freeCandidate.score,
@@ -852,7 +871,7 @@ export function validateAndCompleteSessionPlan(input: {
         rep_max: freeCandidate.exercise.default_rep_max,
         rest_seconds: restForIntensity(freeCandidate.exercise.default_rest_seconds, input.draftPlan.intensity),
         recommended_weight_lbs: weightForIntensity(freeCandidate.exercise.default_weight_lbs, input.draftPlan.intensity),
-        reason: `${buildSelectionReason(freeCandidate, replacementSlot!)} 자동 균형 기준으로 프리웨이트를 1개 포함했습니다.`
+        reason: `${buildSelectionReason(freeCandidate, slot)} 같은 포커스 안에서 프리웨이트 옵션을 반영했습니다.`
       };
       items = withWarmups(items);
     }
@@ -863,9 +882,13 @@ export function validateAndCompleteSessionPlan(input: {
     `운동량 검증: 운동 ${items.length}개, 본세트 ${totalWorkingSets(items)}세트, 워밍업 ${totalWarmupSets(items)}세트.`
   ];
 
-  return {
+  const completedPlan = {
     ...input.draftPlan,
     items,
+    sessionTitle: focusPolicy
+      ? deriveFinalSessionTitle({ items }, focusPolicy)
+      : input.draftPlan.sessionTitle,
+    focusMuscles: focusPolicy ? derivePlanFocusMuscles(items, focusPolicy) : input.draftPlan.focusMuscles,
     volumePrescription: {
       ...input.volumePrescription,
       plannedWarmupSetCount: totalWarmupSets(items),
@@ -873,6 +896,28 @@ export function validateAndCompleteSessionPlan(input: {
     },
     notes
   };
+  return focusPolicy
+    ? validateFinalPlanAgainstFocus(completedPlan, {
+      sessionMode: "strength",
+      sessionTitle: completedPlan.sessionTitle ?? "",
+      selectedMuscles: (completedPlan.focusMuscles ?? []).map((muscle, index) => ({
+        muscle,
+        priority: index + 1,
+        targetEffectiveSets: 0,
+        reason: "final plan focus"
+      })),
+      excludedMuscles: [],
+      movementSlots: [],
+      overallIntensity: completedPlan.intensity,
+      volumeMultiplier: 1,
+      estimatedDurationMinutes: completedPlan.availableMinutes,
+      evidenceKeys: [],
+      reasoningSummary: [],
+      warnings: [],
+      confidence: "medium",
+      requiresUserConfirmation: false
+    }, focusPolicy)
+    : completedPlan;
 }
 
 export function generateWorkoutPlan({
@@ -996,13 +1041,17 @@ export function generateWorkoutPlanFromDecision({
   const planInput: GenerateWorkoutInput = {
     ...input,
     intensity: decision.overallIntensity,
-    availableMinutes: decision.estimatedDurationMinutes || input.availableMinutes,
-    equipmentPreference:
-      input.equipmentPreference === "machine_only" ? "machine_only" : "free_weight_allowed"
+    availableMinutes: decision.estimatedDurationMinutes || input.availableMinutes
   };
+  const focusPolicy = deriveSessionFocusPolicy(decision);
   const decisionSlots = decision.movementSlots
     .slice()
     .sort((a, b) => a.priority - b.priority)
+    .filter((slot) => slotMatchesFocusPolicy({
+      primaryMuscle: slot.primaryMuscle,
+      targetRegion: slot.targetRegion,
+      movementFamily: slot.movementFamily
+    }, focusPolicy))
     .slice(0, estimateMaxItems(input.availableMinutes, decision.movementSlots.length, decision.overallIntensity));
 
   for (const [index, decisionSlot] of decisionSlots.entries()) {
@@ -1010,6 +1059,7 @@ export function generateWorkoutPlanFromDecision({
     const candidate = exercises
       .filter((exercise) => !selectedIds.has(exercise.id))
       .filter((exercise) => !exerciseTouchesForbidden(exercise, forbiddenMuscles, forbiddenMovementFamilies))
+      .filter((exercise) => exerciseMatchesFocusPolicy(exercise, focusPolicy))
       .map((exercise) => scoreExerciseForSlot(exercise, slot, equipment, planInput))
       .filter((result) => Number.isFinite(result.score))
       .sort((a, b) => b.score - a.score)[0];
@@ -1039,13 +1089,15 @@ export function generateWorkoutPlanFromDecision({
   }
 
   const availableExercises = filterAvailableExercises(exercises, equipment, planInput).filter(
-    (exercise) => !exerciseTouchesForbidden(exercise, forbiddenMuscles, forbiddenMovementFamilies)
+    (exercise) =>
+      !exerciseTouchesForbidden(exercise, forbiddenMuscles, forbiddenMovementFamilies)
+      && exerciseMatchesFocusPolicy(exercise, focusPolicy)
   );
 
   const draftPlan: WorkoutPlan = {
     workoutType: "full_body",
     sessionTitle: decision.sessionTitle,
-    focusMuscles: decision.selectedMuscles.map((item) => item.muscle),
+    focusMuscles: focusPolicy.primaryMuscles,
     decisionSummary: decision.reasoningSummary,
     generatedAt: new Date().toISOString(),
     availableMinutes: input.availableMinutes,
@@ -1076,6 +1128,8 @@ export function generateWorkoutPlanFromDecision({
     volumePrescription,
     availableExercises,
     equipment,
+    planInput,
+    focusPolicy,
     hardConstraints: {
       forbiddenMuscles,
       forbiddenMovementFamilies
@@ -1121,7 +1175,8 @@ export function findReplacementExercise({
   excludedExerciseIds = [],
   avoidCurrentEquipment = true,
   forbiddenMuscles = [],
-  forbiddenMovementFamilies = []
+  forbiddenMovementFamilies = [],
+  focusPolicy
 }: {
   currentItem: WorkoutPlanItem;
   input?: GenerateWorkoutInput;
@@ -1131,6 +1186,7 @@ export function findReplacementExercise({
   avoidCurrentEquipment?: boolean;
   forbiddenMuscles?: string[];
   forbiddenMovementFamilies?: MovementFamily[];
+  focusPolicy?: SessionFocusPolicy;
 }): WorkoutPlanItem | null {
   const replacementInput: GenerateWorkoutInput = {
     ...input,
@@ -1153,6 +1209,7 @@ export function findReplacementExercise({
         exercise.id !== currentItem.exercise.id && !excludedExerciseIds.includes(exercise.id)
     )
     .filter((exercise) => !exerciseTouchesForbidden(exercise, forbiddenMuscles, forbiddenMovementFamilies))
+    .filter((exercise) => !focusPolicy || exerciseMatchesFocusPolicy(exercise, focusPolicy))
     .map((exercise) => scoreExerciseForSlot(exercise, slot, equipment, replacementInput))
     .filter((result) => {
       if (!Number.isFinite(result.score)) return false;

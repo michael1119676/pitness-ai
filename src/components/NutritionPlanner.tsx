@@ -2,6 +2,7 @@
 
 import { Check, Clock, Copy, Plus, Star, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { getLocalDateKey, getYesterdayLocalDateKey } from "@/lib/date";
 import type { DailyNutritionPlan, MealLog } from "@/lib/daily-types";
 import {
   buildDailyPlanSnapshot,
@@ -35,9 +36,7 @@ function numberOrZero(value: string) {
 }
 
 function yesterdayKey() {
-  const date = new Date();
-  date.setDate(date.getDate() - 1);
-  return date.toISOString().slice(0, 10);
+  return getYesterdayLocalDateKey();
 }
 
 function toDraft(meal: MealLog | FavoriteMealTemplate): MealDraftState {
@@ -175,7 +174,7 @@ export function NutritionPlanner() {
         .slice(0, 4),
     [allMeals]
   );
-  const yesterdayMeals = allMeals.filter((meal) => meal.loggedAt.startsWith(yesterdayKey()));
+  const yesterdayMeals = allMeals.filter((meal) => getLocalDateKey(new Date(meal.loggedAt)) === yesterdayKey());
 
   if (!state || !plan) {
     return (

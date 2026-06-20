@@ -132,6 +132,16 @@ export interface SessionVolumePrescription {
   volumeMultiplier: number;
 }
 
+export interface SessionFocusPolicy {
+  primaryMuscles: string[];
+  allowedAccessoryMuscles: string[];
+  blockedOutOfFocusMuscles: string[];
+  allowedMovementFamilies: MovementFamily[];
+  maxAccessoryExerciseCount: number;
+  maxAccessorySetRatio: number;
+  allowFullBodyCompletion: boolean;
+}
+
 export type ExerciseRole =
   | "primary_compound"
   | "secondary_compound"
@@ -268,6 +278,54 @@ export interface WorkoutSetLog {
   wasCompleted: boolean;
   wasSkipped: boolean;
   replacementReason: string | null;
+  notes: string;
+}
+
+export interface WorkoutSessionRecord {
+  id: string;
+  localDate: string;
+  status: "in_progress" | "completed" | "abandoned";
+  startedAt: string;
+  completedAt: string | null;
+  durationSeconds: number | null;
+  planRevisionId: string | null;
+  sessionTitle: string;
+  focusMuscles: string[];
+  exerciseIds: string[];
+  totalWorkingSets: number;
+  completedWorkingSets: number;
+  totalVolumeKg: number;
+  notes: string;
+}
+
+export interface WorkoutSessionExerciseRecord {
+  id: string;
+  sessionId: string;
+  exerciseId: string;
+  order: number;
+  plannedSets: number;
+  plannedRepMin: number;
+  plannedRepMax: number;
+  plannedRestSeconds: number;
+}
+
+export interface WorkoutSetRecord {
+  id: string;
+  sessionId: string;
+  sessionExerciseId: string;
+  exerciseId: string;
+  setIndex: number;
+  setType: "warmup" | "working";
+  targetWeightKg: number | null;
+  actualWeightKg: number | null;
+  targetReps: number | null;
+  actualReps: number | null;
+  rir: number | null;
+  rpe: number | null;
+  restSeconds: number | null;
+  completedAt: string | null;
+  wasCompleted: boolean;
+  wasSkipped: boolean;
   notes: string;
 }
 
@@ -468,6 +526,10 @@ export interface DailyTrainingContext {
 export interface DailyTrainingDecision {
   sessionMode: "strength" | "light_recovery" | "rest_recommended";
   sessionTitle: string;
+  primaryFocusMuscles?: string[];
+  allowedAccessoryMuscles?: string[];
+  blockedMuscles?: string[];
+  sessionArchetype?: string;
   selectedMuscles: {
     muscle: string;
     priority: number;

@@ -1,4 +1,5 @@
 import { exerciseCatalog } from "@/lib/exercise-data";
+import { getLocalDateKey } from "@/lib/date";
 import type {
   BodyGoalProfile,
   DailyCheckIn,
@@ -163,7 +164,7 @@ export function analyzeExercisePerformanceTrends(
     const e1rms: number[] = [];
 
     completed.forEach((log) => {
-      const key = log.performedAt.slice(0, 10);
+      const key = getLocalDateKey(new Date(log.performedAt));
       byDay.set(key, (byDay.get(key) ?? 0) + volumeLoad(log));
       const e1rm = estimatedOneRepMax(log);
       if (e1rm !== null) e1rms.push(e1rm);

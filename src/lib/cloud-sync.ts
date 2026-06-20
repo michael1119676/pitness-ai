@@ -25,7 +25,7 @@ export interface CloudSyncStatus extends CloudSyncMetadata {
 }
 
 interface AppStateSnapshot {
-  version: 2;
+  version: 2 | 3;
   createdAt: string;
   profileId: string;
   profileName: string;
@@ -94,7 +94,7 @@ export function exportLocalAppSnapshot(): AppStateSnapshot {
   }, {});
 
   return {
-    version: 2,
+    version: 3,
     createdAt: new Date().toISOString(),
     profileId: profile.id,
     profileName: profile.name,

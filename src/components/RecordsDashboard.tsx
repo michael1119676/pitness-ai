@@ -3,17 +3,19 @@
 import Link from "next/link";
 import { Activity, ArrowRight, Dumbbell, Goal, Library, Scale, Settings, Utensils, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { getLocalDateKey } from "@/lib/date";
 import { exerciseCatalog } from "@/lib/exercise-data";
 import { getInBodyTrendSummary } from "@/lib/inbody";
 import {
   loadAllMealLogs,
   loadBodyCompositions,
+  migrateWorkoutLogsToSessionRecords,
   loadWorkoutLogs,
   todayKey
 } from "@/lib/local-store";
 import { formatBodyPart } from "@/lib/daily-planning";
 import { formatDateShort, formatNumber } from "@/lib/mobile-ui";
-import type { MealLog, WorkoutSetLog } from "@/lib/daily-types";
+import type { MealLog, WorkoutSessionRecord, WorkoutSetLog } from "@/lib/daily-types";
 
 function startOfWeek() {
   const date = new Date();
@@ -24,32 +26,27 @@ function startOfWeek() {
 }
 
 function sameDay(value: string, date = todayKey()) {
-  return value.startsWith(date);
+  return getLocalDateKey(new Date(value)) === date;
 }
 
 export function RecordsDashboard() {
   const [logs, setLogs] = useState<WorkoutSetLog[]>([]);
+  const [sessions, setSessions] = useState<WorkoutSessionRecord[]>([]);
   const [meals, setMeals] = useState<MealLog[]>([]);
   const [bodyRecords, setBodyRecords] = useState(loadBodyCompositions);
 
   useEffect(() => {
+    const migrated = migrateWorkoutLogsToSessionRecords();
     setLogs(loadWorkoutLogs());
+    setSessions(migrated.sessions);
     setMeals(loadAllMealLogs());
     setBodyRecords(loadBodyCompositions());
   }, []);
 
-  const recentWorkoutDays = useMemo(() => {
-    const days = new Map<string, WorkoutSetLog[]>();
-    logs
-      .filter((log) => log.wasCompleted)
-      .slice()
-      .sort((a, b) => b.performedAt.localeCompare(a.performedAt))
-      .forEach((log) => {
-        const day = log.performedAt.slice(0, 10);
-        days.set(day, [...(days.get(day) ?? []), log]);
-      });
-    return Array.from(days.entries()).slice(0, 4);
-  }, [logs]);
+  const recentSessions = useMemo(() =>
+    sessions.slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 6),
+    [sessions]
+  );
 
   const weeklyVolume = useMemo(() => {
     const start = startOfWeek().toISOString();
@@ -72,7 +69,7 @@ export function RecordsDashboard() {
   const avgCalories =
     meals.length === 0
       ? 0
-      : Math.round(meals.reduce((sum, meal) => sum + meal.calories, 0) / Math.max(1, new Set(meals.map((meal) => meal.loggedAt.slice(0, 10))).size));
+      : Math.round(meals.reduce((sum, meal) => sum + meal.calories, 0) / Math.max(1, new Set(meals.map((meal) => getLocalDateKey(new Date(meal.loggedAt)))).size));
 
   return (
     <div className="space-y-4">
@@ -87,15 +84,20 @@ export function RecordsDashboard() {
 
       <section className="grid gap-3 md:grid-cols-2">
         <Panel title="최근 운동" icon={Dumbbell} actionHref="/workout">
-          {recentWorkoutDays.length > 0 ? (
+          {recentSessions.length > 0 ? (
             <div className="space-y-2">
-              {recentWorkoutDays.map(([day, dayLogs]) => (
-                <div key={day} className="rounded-md bg-panel px-3 py-2">
+              {recentSessions.map((session) => (
+                <Link key={session.id} href={`/records/${session.id}`} className="block rounded-md bg-panel px-3 py-3">
                   <div className="flex items-center justify-between gap-2 text-sm">
-                    <span className="font-semibold">{formatDateShort(day)}</span>
-                    <span className="text-slate-500">{dayLogs.length}세트</span>
+                    <span className="font-semibold">{session.sessionTitle}</span>
+                    <span className="text-slate-500">{formatDateShort(session.localDate)}</span>
                   </div>
-                </div>
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-slate-600">
+                    <span>{session.completedWorkingSets}/{session.totalWorkingSets}세트</span>
+                    <span>{formatNumber(session.totalVolumeKg, "kg")}</span>
+                    <span>{session.status === "completed" ? "완료" : session.status === "in_progress" ? "진행 중" : "중단"}</span>
+                  </div>
+                </Link>
               ))}
             </div>
           ) : (
