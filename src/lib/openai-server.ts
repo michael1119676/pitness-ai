@@ -1,0 +1,177 @@
+import OpenAI from "openai";
+import type { DailyTrainingContext, DailyTrainingDecision } from "@/lib/daily-types";
+import {
+  dailyTrainingDecisionJsonSchema,
+  generateFallbackTrainingDecision,
+  validateDailyTrainingDecision
+} from "@/lib/daily-planning";
+
+const timeoutMs = 20000;
+
+function getClient() {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  return new OpenAI({ apiKey });
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms = timeoutMs) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error("OpenAI request timed out")), ms);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function withSingleRetry<T>(factory: () => Promise<T>) {
+  try {
+    return await factory();
+  } catch (firstError) {
+    try {
+      return await factory();
+    } catch {
+      throw firstError;
+    }
+  }
+}
+
+function parseJson<T>(value: string): T {
+  return JSON.parse(value) as T;
+}
+
+export async function getTrainingFocusDecision(context: DailyTrainingContext) {
+  const fallback = generateFallbackTrainingDecision(context);
+  const client = getClient();
+  const model = process.env.OPENAI_MODEL;
+
+  if (!client) {
+    return {
+      decision: fallback,
+      source: "fallback" as const,
+      message: "OPENAI_API_KEY가 없어 로컬 fallback 플래너를 사용했습니다."
+    };
+  }
+
+  if (!model) {
+    return {
+      decision: fallback,
+      source: "fallback" as const,
+      message: "OPENAI_MODEL이 없어 로컬 fallback 플래너를 사용했습니다."
+    };
+  }
+
+  try {
+    const response = await withSingleRetry(() =>
+      withTimeout(
+        client.responses.create({
+          model,
+          instructions: [
+            "You are the AI Training Focus Planner for a Korean Adaptive Daily Fitness Coach.",
+            "Use only the provided JSON. Do not infer unavailable facts or invent records.",
+            "Return Korean reasoning and JSON only through the provided schema.",
+            "Choose session mode, body-part focus, selected/excluded muscles, and movement slots only.",
+            "Do not choose concrete exercise names or equipment names. The equipment-aware engine will do that.",
+            "forbiddenMuscles and painMuscles are absolute hard constraints. Never select them or related target regions.",
+            "forbiddenMovementFamilies are absolute hard constraints.",
+            "Never select a movementFamily that is absent from availableMovementCapabilities.",
+            "Respect equipmentMode, availableTimeMinutes, recoveryScore, weekly volume deficits, bodyGoalProfile, nutritionStatus, and inBodyTrend.",
+            "Do not overreact to a single InBody record; if confidence is low, say insufficient_data.",
+            "Do not force priority muscles when recovery is poor, soreness is high, or pain is present.",
+            "Do not name the result Push Day, Pull Day, Legs, Upper, Lower, or Full Body.",
+            "Use body-part titles such as 광배·등 상부·측면어깨 집중.",
+            "If constraints leave no safe session, choose rest_recommended.",
+            "Set fallbackUsed to false."
+          ].join("\n"),
+          input: JSON.stringify(context),
+          text: {
+            format: {
+              type: "json_schema",
+              name: "daily_training_decision",
+              schema: dailyTrainingDecisionJsonSchema,
+              strict: true
+            }
+          }
+        })
+      )
+    );
+    const parsed = parseJson<DailyTrainingDecision>(response.output_text);
+    const decision = validateDailyTrainingDecision(
+      { ...parsed, fallbackUsed: false },
+      context
+    );
+
+    return { decision, source: "openai" as const, message: "OpenAI 결정 결과를 적용했습니다." };
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : "알 수 없는 OpenAI 호출 오류";
+    console.warn("[openai] training-focus fallback:", detail);
+    return {
+      decision: {
+        ...fallback,
+        warnings: [
+          ...fallback.warnings,
+          `OpenAI 호출 실패: ${detail}`
+        ]
+      },
+      source: "fallback" as const,
+      message: `OpenAI 호출 실패로 로컬 fallback 플래너를 사용했습니다. (${detail})`
+    };
+  }
+}
+
+export async function getShortCoachJson({
+  name,
+  instructions,
+  input,
+  fallback
+}: {
+  name: string;
+  instructions: string;
+  input: unknown;
+  fallback: { summary: string; actions: string[]; fallbackUsed: boolean };
+}) {
+  const client = getClient();
+  const model = process.env.OPENAI_MODEL;
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["summary", "actions", "fallbackUsed"],
+    properties: {
+      summary: { type: "string" },
+      actions: { type: "array", items: { type: "string" } },
+      fallbackUsed: { type: "boolean" }
+    }
+  } as const;
+
+  if (!client || !model) return fallback;
+
+  try {
+    const response = await withSingleRetry(() =>
+      withTimeout(client.responses.create({
+        model,
+        instructions,
+        input: JSON.stringify(input),
+        text: {
+          format: {
+            type: "json_schema",
+            name,
+            schema,
+            strict: true
+          }
+        }
+      }))
+    );
+    return parseJson<{ summary: string; actions: string[]; fallbackUsed: boolean }>(
+      response.output_text
+    );
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : "알 수 없는 OpenAI 호출 오류";
+    console.warn(`[openai] ${name} fallback:`, detail);
+    return fallback;
+  }
+}

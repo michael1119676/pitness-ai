@@ -1,0 +1,362 @@
+import type {
+  EquipmentPreferenceMode,
+  Intensity,
+  MovementFamily,
+  Muscle,
+  TargetRegion,
+  WorkoutPlan
+} from "@/lib/types";
+
+export const muscleGroups = {
+  lower_body: ["quads", "hamstrings", "glutes", "calves"],
+  upper_body: [
+    "chest",
+    "upper_chest",
+    "lower_chest",
+    "lats",
+    "upper_back",
+    "mid_back",
+    "front_delt",
+    "side_delt",
+    "rear_delt",
+    "biceps",
+    "triceps"
+  ],
+  shoulders: ["front_delt", "side_delt", "rear_delt", "traps"],
+  arms: ["biceps", "triceps", "forearms"],
+  back: ["lats", "upper_back", "mid_back", "lower_back", "traps"]
+} as const;
+
+export type MuscleGroup = keyof typeof muscleGroups;
+export type AvoidableBodyPart = Muscle | TargetRegion | MuscleGroup;
+export type TrainingIntent = "train" | "rest";
+export type MainBodyGoal =
+  | "lean_muscular"
+  | "aesthetic_v_taper"
+  | "classic_physique"
+  | "bulk_muscle_gain"
+  | "body_recomposition"
+  | "fat_loss"
+  | "athletic_performance"
+  | "lower_body_focus"
+  | "balanced_health"
+  | "custom";
+
+export type PreferredTrainingStyle =
+  | "machine_cable"
+  | "balanced"
+  | "strength"
+  | "hypertrophy"
+  | "low_fatigue";
+
+export type DietAggressiveness = "conservative" | "moderate" | "aggressive";
+export type CardioPreference = "minimal" | "moderate" | "high";
+
+export type ScheduleActivityType =
+  | "long_walk"
+  | "running"
+  | "hiking"
+  | "sports"
+  | "prolonged_standing"
+  | "physical_labor"
+  | "important_upper_body_activity"
+  | "important_lower_body_activity"
+  | "custom";
+
+export interface BodyGoalProfile {
+  mainBodyGoal: MainBodyGoal;
+  priorityMuscles: AvoidableBodyPart[];
+  avoidOverdevelopmentMuscles: AvoidableBodyPart[];
+  targetBodyWeightKg: number | null;
+  targetBodyFatPercentage: number | null;
+  targetSkeletalMuscleMassKg: number | null;
+  preferredTrainingStyle: PreferredTrainingStyle;
+  dietAggressiveness: DietAggressiveness;
+  cardioPreference: CardioPreference;
+  weeklyWeightChangeTargetKg: number;
+  notes: string;
+}
+
+export interface ScheduleConstraint {
+  id: string;
+  date: string;
+  activityType: ScheduleActivityType;
+  expectedDurationMinutes: number;
+  intensity: Intensity;
+  affectedMuscles: AvoidableBodyPart[];
+  memo: string;
+}
+
+export interface DailyCheckIn {
+  date: string;
+  trainingIntent: TrainingIntent;
+  bedTime: string;
+  wakeTime: string;
+  sleepQuality: number;
+  conditionScore: number;
+  sorenessMuscles: AvoidableBodyPart[];
+  sorenessLevel: Record<string, number>;
+  painMuscles: AvoidableBodyPart[];
+  painLevel: Record<string, number>;
+  avoidMusclesToday: AvoidableBodyPart[];
+  scheduleConstraints: ScheduleConstraint[];
+  availableTimeMinutes: number;
+  preferredWorkoutStartTime: string;
+  memo: string;
+}
+
+export interface WorkoutSetLog {
+  id: string;
+  performedAt: string;
+  exerciseId: string;
+  equipmentId: string;
+  weight: number;
+  reps: number;
+  rir: number | null;
+  rpe: number | null;
+  isFailure: boolean;
+  wasCompleted: boolean;
+  wasSkipped: boolean;
+  replacementReason: string | null;
+  notes: string;
+}
+
+export interface ExerciseMuscleContribution {
+  exerciseId: string;
+  muscle: AvoidableBodyPart;
+  role: "primary" | "secondary";
+  contributionWeight: number;
+}
+
+export interface MuscleHistorySummary {
+  muscle: string;
+  effectiveSetsLast7Days: number;
+  effectiveSetsLast14Days: number;
+  effectiveSetsLast28Days: number;
+  targetEffectiveSetsPerWeek: number;
+  weeklyVolumeDeficit: number;
+  lastTrainedAt: string | null;
+  hoursSinceLastTraining: number | null;
+  averageRpe: number | null;
+  averageRir: number | null;
+  sorenessLevel: number;
+  painLevel: number;
+  recoveryScore: number;
+  performanceTrend: "up" | "stable" | "down" | "insufficient_data";
+}
+
+export interface MovementHistorySummary {
+  movementFamily: MovementFamily;
+  effectiveSetsLast7Days: number;
+  lastTrainedAt: string | null;
+  recoveryScore: number;
+}
+
+export interface ExercisePerformanceTrend {
+  exerciseId: string;
+  totalLogs: number;
+  recentThreeVolumeLoads: number[];
+  estimatedOneRepMaxTrend: "up" | "stable" | "down" | "insufficient_data";
+  isStalled: boolean;
+  isImproving: boolean;
+  skipCount: number;
+  unavailableCount: number;
+}
+
+export interface BodyComposition {
+  measuredAt: string;
+  device: string | null;
+  weightKg: number | null;
+  skeletalMuscleMassKg: number | null;
+  muscleMassKg: number | null;
+  bodyFatMassKg: number | null;
+  bmi: number | null;
+  bodyFatPercentage: number | null;
+  basalMetabolicRateKcal: number | null;
+  inBodyScore: number | null;
+  rightArmMuscleKg: number | null;
+  leftArmMuscleKg: number | null;
+  trunkMuscleKg: number | null;
+  rightLegMuscleKg: number | null;
+  leftLegMuscleKg: number | null;
+  totalBodyWaterL: number | null;
+  intracellularWaterL: number | null;
+  extracellularWaterL: number | null;
+  extracellularWaterRatio: number | null;
+  waistCircumferenceCm: number | null;
+  visceralFatAreaCm2: number | null;
+  visceralFatLevel: number | null;
+  raw: Record<string, string | number | null>;
+}
+
+export interface InBodyTrendSummary {
+  status: "ok" | "insufficient_data";
+  recordCount: number;
+  latest: BodyComposition | null;
+  previous: BodyComposition | null;
+  confidence: "low" | "medium" | "high";
+  weightChangeKg: number | null;
+  skeletalMuscleMassChangeKg: number | null;
+  bodyFatMassChangeKg: number | null;
+  bodyFatPercentageChange: number | null;
+  fourWeekAverages: {
+    weightKg: number | null;
+    skeletalMuscleMassKg: number | null;
+    bodyFatMassKg: number | null;
+    bodyFatPercentage: number | null;
+  };
+  armMuscleImbalanceKg: number | null;
+  legMuscleImbalanceKg: number | null;
+  hydrationNote: string;
+  summary: string[];
+}
+
+export interface NutritionProfile {
+  startingTargetCalories: number;
+  targetProteinG: number;
+  targetCarbsG: number;
+  targetFatG: number;
+  mealCount: number;
+  breakfastEnabled: boolean;
+  lunchEnabled: boolean;
+  dinnerEnabled: boolean;
+  snackEnabled: boolean;
+  preferredMealTimes: Record<string, string>;
+  foodPreferences: string[];
+  dislikedFoods: string[];
+  allergies: string[];
+  dietaryRestrictions: string[];
+  workoutMealTimingPreference: "pre_workout_carbs" | "post_workout_carbs" | "even_distribution";
+}
+
+export interface MealLog {
+  id: string;
+  loggedAt: string;
+  mealName: string;
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  memo: string;
+}
+
+export interface NutritionStatus {
+  consumedCalories: number;
+  consumedProteinG: number;
+  consumedCarbsG: number;
+  consumedFatG: number;
+  remainingMeals: string[];
+  notes: string[];
+}
+
+export interface DailyNutritionPlan {
+  totalCalories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  mealTargets: Record<
+    string,
+    {
+      calories: number;
+      proteinG: number;
+      carbsG: number;
+      fatG: number;
+    }
+  >;
+  preWorkoutCarbsG: number;
+  postWorkoutCarbsG: number;
+  supplementChecklist: string[];
+  notes: string[];
+}
+
+export interface UserSupplementProfile {
+  id: string;
+  supplementName: string;
+  enabled: boolean;
+  userConfiguredDose: string;
+  preferredTiming: string;
+  frequency: string;
+  notes: string;
+}
+
+export interface AvailableMovementCapability {
+  movementFamily: MovementFamily;
+  targetRegions: string[];
+  primaryMuscles: string[];
+  equipmentTypes: string[];
+}
+
+export interface DailyTrainingContext {
+  date: string;
+  trainingIntent: TrainingIntent;
+  bodyGoalProfile: BodyGoalProfile;
+  sleepSummary: {
+    durationMinutes: number;
+    quality: number;
+    conditionScore: number;
+  };
+  availableTimeMinutes: number;
+  hardConstraints: {
+    forbiddenMuscles: string[];
+    forbiddenMovementFamilies: MovementFamily[];
+    painMuscles: string[];
+    disabledEquipmentIds: string[];
+    unavailableEquipmentIds: string[];
+    equipmentMode: EquipmentPreferenceMode;
+  };
+  scheduleConstraints: ScheduleConstraint[];
+  muscleHistory: MuscleHistorySummary[];
+  movementHistory: MovementHistorySummary[];
+  exercisePerformanceTrends: ExercisePerformanceTrend[];
+  inBodyTrend: InBodyTrendSummary;
+  nutritionStatus: NutritionStatus;
+  availableMovementCapabilities: AvailableMovementCapability[];
+}
+
+export interface DailyTrainingDecision {
+  sessionMode: "strength" | "light_recovery" | "rest_recommended";
+  sessionTitle: string;
+  selectedMuscles: {
+    muscle: string;
+    priority: number;
+    targetEffectiveSets: number;
+    reason: string;
+  }[];
+  excludedMuscles: {
+    muscle: string;
+    reason: string;
+  }[];
+  movementSlots: {
+    slotId: string;
+    primaryMuscle: string;
+    targetRegion: string | null;
+    movementFamily: MovementFamily;
+    targetSets: number;
+    repMin: number;
+    repMax: number;
+    intensity: Intensity;
+    priority: number;
+    reason: string;
+  }[];
+  overallIntensity: Intensity;
+  volumeMultiplier: number;
+  estimatedDurationMinutes: number;
+  evidenceKeys: string[];
+  reasoningSummary: string[];
+  warnings: string[];
+  confidence: "low" | "medium" | "high";
+  requiresUserConfirmation: boolean;
+  fallbackUsed?: boolean;
+}
+
+export interface DailyPlanRevision {
+  id: string;
+  date: string;
+  revisionNumber: number;
+  triggerType: string;
+  triggerPayload: unknown;
+  trainingDecisionSnapshot: DailyTrainingDecision | null;
+  finalWorkoutPlanSnapshot: WorkoutPlan | null;
+  nutritionPlanSnapshot: DailyNutritionPlan;
+  createdAt: string;
+}
