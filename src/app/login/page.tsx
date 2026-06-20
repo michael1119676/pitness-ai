@@ -1,5 +1,5 @@
-import { LoginScreen } from "@/components/LoginScreen";
+import { redirect } from "next/navigation";
 
 export default function LoginPage() {
-  return <LoginScreen />;
+  redirect("/today");
 }

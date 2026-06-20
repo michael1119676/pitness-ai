@@ -136,9 +136,9 @@ export function LoginScreen() {
             <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-mint">
               Pitness AI
             </p>
-            <h1 className="mt-2 text-3xl font-semibold md:text-4xl">계정으로 시작하기</h1>
+            <h1 className="mt-2 text-3xl font-semibold md:text-4xl">오늘 운동 시작하기</h1>
             <p className="mt-3 text-sm leading-6 text-slate-300">
-              운동 기록, 인바디, 식단, 기구 설정을 계정별로 분리해서 저장합니다.
+              계정으로 기록을 이어가거나, 먼저 둘러보면서 루틴 흐름을 확인할 수 있습니다.
             </p>
           </div>
           <div className="mt-8 grid gap-2 text-sm text-slate-300">
@@ -265,10 +265,10 @@ export function LoginScreen() {
               className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-md border border-line bg-white px-4 text-sm font-semibold text-ink shadow-soft"
             >
               <Dumbbell size={17} aria-hidden />
-              검증용으로 바로 들어가기
+              계정 없이 둘러보기
             </button>
             <p className="mt-2 text-xs leading-5 text-slate-500">
-              계정 없이 앱 화면을 확인합니다. 기록은 이 브라우저에만 임시 저장됩니다.
+              회원가입 없이 앱을 먼저 확인합니다. 기록은 이 브라우저에만 저장됩니다.
             </p>
           </div>
         </section>

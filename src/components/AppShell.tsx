@@ -1,13 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   CalendarDays,
   Dumbbell,
   Activity,
   ListChecks,
-  LogOut,
   Menu,
   Settings,
   Sparkles,
@@ -16,16 +15,13 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
-  activateAppUserFromAuth,
+  activateGuestAppUser,
   appUserChangeEvent,
-  clearActiveAppUser,
   getActiveAppUser,
   getUserInitial,
-  isAccountAuthUser,
   isGuestAppUser,
   type AppUser
 } from "@/lib/app-users";
-import { getSupabaseBrowserClient } from "@/lib/supabase-client";
 
 const navItems = [
   { href: "/today", label: "오늘", icon: CalendarDays },
@@ -57,67 +53,27 @@ function pageTitle(pathname: string) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [activeUser, setActiveUser] = useState<AppUser | null | undefined>(undefined);
-  const isLoginRoute = pathname === "/login";
 
   useEffect(() => {
     let isMounted = true;
-    const supabase = getSupabaseBrowserClient();
 
-    const goToLogin = () => {
-      clearActiveAppUser();
-      if (isMounted) setActiveUser(null);
-      if (!isLoginRoute) {
-        router.replace("/login");
-      }
+    const startVisitor = () => {
+      const visitor = activateGuestAppUser();
+      if (isMounted) setActiveUser(visitor);
     };
 
     const refresh = async () => {
       const localUser = getActiveAppUser();
-      if (isGuestAppUser(localUser)) {
+      if (localUser) {
         if (isMounted) setActiveUser(localUser);
         return;
       }
 
-      if (!supabase) {
-        goToLogin();
-        return;
-      }
-
-      const { data } = await supabase.auth.getSession();
-      const authUser = data.session?.user ?? null;
-      if (!isAccountAuthUser(authUser)) {
-        await supabase.auth.signOut();
-        const fallbackUser = getActiveAppUser();
-        if (isGuestAppUser(fallbackUser)) {
-          if (isMounted) setActiveUser(fallbackUser);
-        } else {
-          goToLogin();
-        }
-        return;
-      }
-
-      const user = activateAppUserFromAuth(authUser);
-      if (isMounted) setActiveUser(user);
+      startVisitor();
     };
 
     void refresh();
-    const authListener = supabase?.auth.onAuthStateChange((_event, session) => {
-      if (!isAccountAuthUser(session?.user)) {
-        if (session?.user) void supabase.auth.signOut();
-        const fallbackUser = getActiveAppUser();
-        if (isGuestAppUser(fallbackUser)) {
-          if (isMounted) setActiveUser(fallbackUser);
-        } else {
-          goToLogin();
-        }
-        return;
-      }
-      const user = activateAppUserFromAuth(session.user);
-      if (isMounted) setActiveUser(user);
-    });
-
     const handleUserChange = () => {
       void refresh();
     };
@@ -125,28 +81,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     window.addEventListener(appUserChangeEvent, handleUserChange);
     return () => {
       isMounted = false;
-      authListener?.data.subscription.unsubscribe();
       window.removeEventListener("storage", handleUserChange);
       window.removeEventListener(appUserChangeEvent, handleUserChange);
     };
-  }, [isLoginRoute, router]);
-
-  async function leaveUser() {
-    const supabase = getSupabaseBrowserClient();
-    await supabase?.auth.signOut();
-    clearActiveAppUser();
-    setActiveUser(null);
-    router.push("/login");
-  }
-
-  if (isLoginRoute) {
-    return <div className="min-h-screen text-ink">{children}</div>;
-  }
+  }, []);
 
   if (activeUser === undefined) {
     return (
       <div className="grid min-h-screen place-items-center px-4 text-sm font-semibold text-slate-500">
-        계정 확인 중
+        화면 준비 중
       </div>
     );
   }
@@ -206,7 +149,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <div className="border-b border-line px-3 py-3">
                   <p className="truncate text-sm font-semibold">{activeUser.name}</p>
                   <p className="truncate text-xs text-slate-500">
-                    {activeUser.email ?? (isGuestAppUser(activeUser) ? "검증 모드" : "로그인됨")}
+                    {activeUser.email ?? (isGuestAppUser(activeUser) ? "방문자 모드" : "로그인됨")}
                   </p>
                 </div>
                 <div className="grid p-1">
@@ -223,14 +166,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       </Link>
                     );
                   })}
-                  <button
-                    type="button"
-                    onClick={leaveUser}
-                    className="flex min-h-10 items-center gap-2 rounded-md px-3 text-left text-sm font-semibold text-rose-700 hover:bg-rose-50"
-                  >
-                    <LogOut size={16} aria-hidden />
-                    로그아웃
-                  </button>
                 </div>
               </div>
             </details>

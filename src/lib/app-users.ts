@@ -148,10 +148,11 @@ export function activateGuestAppUser() {
 
   const users = loadAppUsers();
   const existing = users.find((item) => item.id === guestAppUserId);
+  const guestName = existing?.name && existing.name !== "검증 게스트" ? existing.name : "방문자";
   const nextUser: AppUser = {
     id: guestAppUserId,
     email: null,
-    name: existing?.name ?? "검증 게스트",
+    name: guestName,
     accent: existing?.accent ?? "sky",
     createdAt: existing?.createdAt ?? new Date().toISOString()
   };
