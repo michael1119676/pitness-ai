@@ -9,12 +9,10 @@ import {
   defaultSettings,
   loadSettings,
   resetEquipment,
-  saveSettings,
-  toggleMuscle
+  saveSettings
 } from "@/lib/local-store";
 import {
   equipmentPreferenceLabels,
-  muscles,
   type EquipmentPreferenceMode,
   type Intensity,
   type UserSettings
@@ -22,10 +20,17 @@ import {
 
 const preferenceModes = Object.keys(equipmentPreferenceLabels) as EquipmentPreferenceMode[];
 const intensities: Intensity[] = ["low", "normal", "high"];
+const intensityLabels: Record<Intensity, string> = {
+  low: "낮음",
+  normal: "보통",
+  high: "높음"
+};
 
 export function SettingsPanel() {
   const [settings, setSettings] = useState<UserSettings>(defaultSettings);
   const [message, setMessage] = useState("");
+  const [confirmReset, setConfirmReset] = useState(false);
+  const showDebug = process.env.NODE_ENV !== "production";
 
   useEffect(() => {
     setSettings(loadSettings());
@@ -74,6 +79,7 @@ export function SettingsPanel() {
             label="기본 강도"
             value={settings.defaultIntensity}
             options={intensities}
+            labels={intensityLabels}
             onChange={(defaultIntensity) => patch({ defaultIntensity })}
           />
           <SelectField
@@ -85,42 +91,9 @@ export function SettingsPanel() {
           />
         </div>
 
-        <fieldset className="mt-4">
-          <legend className="text-sm font-semibold text-slate-700">기본 피로 근육</legend>
-          <div className="mt-2 flex flex-wrap gap-1">
-            {muscles
-              .filter((muscle) => muscle !== "cardio")
-              .map((muscle) => {
-                const selected = settings.soreMuscles.includes(muscle);
-                return (
-                  <button
-                    key={muscle}
-                    type="button"
-                    onClick={() => patch({ soreMuscles: toggleMuscle(settings.soreMuscles, muscle) })}
-                    className={`rounded-md border px-2 py-1 text-xs font-medium ${
-                      selected
-                        ? "border-coral bg-rose-50 text-coral"
-                        : "border-line bg-panel text-slate-600"
-                    }`}
-                  >
-                    {titleCase(muscle)}
-                  </button>
-                );
-              })}
-          </div>
-        </fieldset>
-
         {message ? <p className="mt-4 text-sm font-medium text-emerald-700">{message}</p> : null}
 
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-between">
-          <button
-            type="button"
-            onClick={resetSeedEquipment}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-line bg-panel px-4 text-sm font-semibold text-slate-700"
-          >
-            <RotateCcw size={17} aria-hidden />
-            기구 초기화
-          </button>
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
           <button
             type="button"
             onClick={save}
@@ -132,7 +105,46 @@ export function SettingsPanel() {
         </div>
       </section>
 
-      <CloudSyncPanel />
+      {showDebug ? (
+        <details className="rounded-md border border-line bg-white p-4 shadow-soft">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-700">
+            개발자용 동기화 패널
+          </summary>
+          <div className="mt-4">
+            <CloudSyncPanel />
+          </div>
+        </details>
+      ) : null}
+
+      <section className="rounded-md border border-rose-100 bg-white p-4 shadow-soft">
+        <h2 className="font-semibold text-rose-800">고급 설정</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          기구 목록 초기화는 현재 헬스장 기구 설정을 기본값으로 되돌립니다.
+        </p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={() => setConfirmReset(true)}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 text-sm font-semibold text-rose-700"
+          >
+            <RotateCcw size={17} aria-hidden />
+            기구 초기화
+          </button>
+          {confirmReset ? (
+            <button
+              type="button"
+              onClick={() => {
+                resetSeedEquipment();
+                setConfirmReset(false);
+                setMessage("기구 목록을 기본 데이터로 초기화했습니다.");
+              }}
+              className="inline-flex min-h-11 items-center justify-center rounded-md bg-rose-700 px-4 text-sm font-semibold text-white"
+            >
+              정말 초기화
+            </button>
+          ) : null}
+        </div>
+      </section>
 
       <section className="grid gap-3 md:grid-cols-3">
         <SettingsLink

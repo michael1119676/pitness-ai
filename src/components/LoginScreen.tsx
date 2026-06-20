@@ -60,7 +60,7 @@ export function LoginScreen() {
 
     const supabase = getSupabaseBrowserClient();
     if (!supabase) {
-      setMessage("Supabase 환경변수가 필요합니다. Vercel과 .env.local 설정을 확인하세요.");
+      setMessage("로그인 서버 연결 설정이 필요합니다. 배포 설정을 확인하세요.");
       return;
     }
 

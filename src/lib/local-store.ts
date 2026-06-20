@@ -95,6 +95,54 @@ export const defaultSupplements: UserSupplementProfile[] = [
   }
 ];
 
+export interface WorkoutUiSession {
+  date: string;
+  status: "idle" | "in_progress" | "completed";
+  startedAt: string | null;
+  completedAt: string | null;
+  currentItemId: string | null;
+  currentSetIndex: number;
+  restEndsAt: string | null;
+  draft: {
+    weight: string;
+    reps: string;
+    rir: string;
+    rpe: string;
+  };
+}
+
+export interface MealDraftState {
+  mealName: string;
+  calories: string;
+  proteinG: string;
+  carbsG: string;
+  fatG: string;
+  memo: string;
+  saveAsFavorite: boolean;
+}
+
+export interface FavoriteMealTemplate {
+  id: string;
+  label: string;
+  mealName: string;
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  memo: string;
+  createdAt: string;
+}
+
+export const emptyMealDraftState: MealDraftState = {
+  mealName: "아침",
+  calories: "",
+  proteinG: "",
+  carbsG: "",
+  fatG: "",
+  memo: "",
+  saveAsFavorite: false
+};
+
 export function todayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
@@ -254,6 +302,10 @@ export function loadMealLogs(date = todayKey()) {
   );
 }
 
+export function loadAllMealLogs() {
+  return loadJson<MealLog[]>(localStoreKeys.mealLogs, []);
+}
+
 export function saveMealLog(meal: MealLog) {
   saveJson(localStoreKeys.mealLogs, [
     ...loadJson<MealLog[]>(localStoreKeys.mealLogs, []),
@@ -277,6 +329,65 @@ export function loadWorkoutLogs() {
 
 export function saveWorkoutLogs(logs: WorkoutSetLog[]) {
   saveJson(localStoreKeys.workoutLogs, logs);
+}
+
+export function makeDefaultWorkoutSession(date = todayKey()): WorkoutUiSession {
+  return {
+    date,
+    status: "idle",
+    startedAt: null,
+    completedAt: null,
+    currentItemId: null,
+    currentSetIndex: 1,
+    restEndsAt: null,
+    draft: {
+      weight: "",
+      reps: "",
+      rir: "2",
+      rpe: ""
+    }
+  };
+}
+
+export function loadWorkoutSession(date = todayKey()) {
+  const stored = loadJson<WorkoutUiSession | null>(localStoreKeys.workoutSession, null);
+  if (!stored || stored.date !== date) return makeDefaultWorkoutSession(date);
+  return {
+    ...makeDefaultWorkoutSession(date),
+    ...stored,
+    draft: { ...makeDefaultWorkoutSession(date).draft, ...stored.draft }
+  };
+}
+
+export function saveWorkoutSession(session: WorkoutUiSession) {
+  saveJson(localStoreKeys.workoutSession, session);
+}
+
+export function clearWorkoutSession(date = todayKey()) {
+  saveWorkoutSession(makeDefaultWorkoutSession(date));
+}
+
+export function loadMealDraft() {
+  return {
+    ...emptyMealDraftState,
+    ...loadJson<Partial<MealDraftState>>(localStoreKeys.mealDraft, {})
+  };
+}
+
+export function saveMealDraft(draft: MealDraftState) {
+  saveJson(localStoreKeys.mealDraft, draft);
+}
+
+export function clearMealDraft() {
+  saveJson(localStoreKeys.mealDraft, emptyMealDraftState);
+}
+
+export function loadFavoriteMeals() {
+  return loadJson<FavoriteMealTemplate[]>(localStoreKeys.favoriteMeals, []);
+}
+
+export function saveFavoriteMeals(favorites: FavoriteMealTemplate[]) {
+  saveJson(localStoreKeys.favoriteMeals, favorites.slice(0, 20));
 }
 
 export function loadDailyPlanRevisions(date = todayKey()) {

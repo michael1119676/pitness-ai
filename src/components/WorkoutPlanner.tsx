@@ -1,158 +1,131 @@
 "use client";
 
-import {
-  AlertTriangle,
-  Ban,
-  Dumbbell,
-  RefreshCcw,
-  RotateCcw,
-  Save,
-  TrendingDown,
-  TrendingUp
-} from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Ban, Check, Dumbbell, RefreshCcw, Timer, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { AvoidableBodyPart, DailyTrainingDecision, WorkoutSetLog } from "@/lib/daily-types";
+import type { AvoidableBodyPart, WorkoutSetLog } from "@/lib/daily-types";
 import { formatBodyPart, toggleBodyPart } from "@/lib/daily-planning";
 import {
   buildDailyPlanSnapshot,
   loadDailyPlanningState,
   type DailyPlanningState
 } from "@/lib/daily-plan-client";
-import { titleCase } from "@/lib/format";
 import {
   appendDailyPlanRevision,
   loadLatestDailyPlanRevision,
+  loadWorkoutSession,
   saveDailyCheckIn,
   saveEquipment,
-  saveWorkoutLogs
+  saveWorkoutLogs,
+  saveWorkoutSession,
+  type WorkoutUiSession
 } from "@/lib/local-store";
-import type { WorkoutPlan, WorkoutPlanItem } from "@/lib/types";
-import {
-  adjustRecommendedWeight,
-  findReplacementExercise
-} from "@/lib/workout-engine";
+import { countPlanSets, formatMinutes, intensityLabels, summarizeFocusMuscles } from "@/lib/mobile-ui";
+import type { Equipment, WorkoutPlan, WorkoutPlanItem } from "@/lib/types";
+import { adjustRecommendedWeight, findReplacementExercise } from "@/lib/workout-engine";
 
 type Snapshot = ReturnType<typeof buildDailyPlanSnapshot>;
-
-type SetDraft = {
-  weight: string;
-  reps: string;
-  rir: string;
-  rpe: string;
-};
-
-const emptySetDraft: SetDraft = {
-  weight: "",
-  reps: "",
-  rir: "",
-  rpe: ""
-};
+type ReplacementIntent = "swap" | "unavailable";
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
-function numberOrZero(value: string) {
+function numeric(value: string, fallback = 0) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function nullableNumber(value: string) {
-  if (value.trim() === "") return null;
+function nullable(value: string) {
+  if (!value.trim()) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function itemTouchesMuscle(item: WorkoutPlanItem, muscle: string) {
-  return (
-    item.exercise.primary_muscle === muscle
-    || item.exercise.target_region === muscle
-    || item.exercise.secondary_muscles.some((secondary) => secondary === muscle)
-  );
+function defaultDraft(item: WorkoutPlanItem) {
+  return {
+    weight: item.recommended_weight_lbs ? String(item.recommended_weight_lbs) : "",
+    reps: String(item.rep_max),
+    rir: "2",
+    rpe: ""
+  };
 }
 
-function estimateEndTime(items: WorkoutPlanItem[], loggedSetCount: number) {
-  const remainingSets = items.reduce((sum, item) => sum + item.sets, 0) - loggedSetCount;
-  const minutes = Math.max(0, Math.ceil(remainingSets * 4.5));
-  const date = new Date(Date.now() + minutes * 60_000);
-  return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+function getRecentSet(logs: WorkoutSetLog[], item: WorkoutPlanItem) {
+  return logs
+    .slice()
+    .reverse()
+    .find((log) => log.exerciseId === item.exercise.id && log.wasCompleted);
+}
+
+function secondsLeft(restEndsAt: string | null) {
+  if (!restEndsAt) return 0;
+  return Math.max(0, Math.ceil((new Date(restEndsAt).getTime() - Date.now()) / 1000));
 }
 
 export function WorkoutPlanner() {
   const [state, setState] = useState<DailyPlanningState | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [items, setItems] = useState<WorkoutPlanItem[]>([]);
-  const [setDrafts, setSetDrafts] = useState<Record<string, SetDraft>>({});
-  const [sessionLogs, setSessionLogs] = useState<WorkoutSetLog[]>([]);
+  const [session, setSession] = useState<WorkoutUiSession | null>(null);
   const [message, setMessage] = useState("");
+  const [replacement, setReplacement] = useState<{
+    item: WorkoutPlanItem;
+    intent: ReplacementIntent;
+    candidates: WorkoutPlanItem[];
+  } | null>(null);
+  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     const loaded = loadDailyPlanningState();
     const latestRevision = loadLatestDailyPlanRevision(loaded.date);
-    const built = buildDailyPlanSnapshot(
-      loaded,
-      latestRevision?.trainingDecisionSnapshot ?? null
-    );
+    const built = buildDailyPlanSnapshot(loaded, latestRevision?.trainingDecisionSnapshot ?? null);
+    const planItems = latestRevision?.finalWorkoutPlanSnapshot?.items ?? built.plan.items;
+    const loadedSession = loadWorkoutSession(loaded.date);
     setState(loaded);
     setSnapshot(built);
-    setItems(built.plan.items);
-    setSessionLogs(
-      loaded.workoutLogs.filter((log) => log.performedAt.startsWith(loaded.date))
-    );
+    setItems(planItems);
+    setSession(loadedSession);
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const completedLogs = useMemo(
+    () => state?.workoutLogs.filter((log) => log.performedAt.startsWith(state.date) && log.wasCompleted) ?? [],
+    [state]
+  );
+
   const progress = useMemo(() => {
-    const completed = sessionLogs.filter((log) => log.wasCompleted && !log.wasSkipped);
-    const loggedByExercise = new Map<string, number>();
-    completed.forEach((log) => {
-      loggedByExercise.set(log.exerciseId, (loggedByExercise.get(log.exerciseId) ?? 0) + 1);
-    });
-
-    const effectiveByMuscle = new Map<string, number>();
-    completed.forEach((log) => {
-      const item = items.find((candidate) => candidate.exercise.id === log.exerciseId);
-      if (!item) return;
-      effectiveByMuscle.set(
-        item.exercise.primary_muscle,
-        (effectiveByMuscle.get(item.exercise.primary_muscle) ?? 0) + 1
-      );
-      item.exercise.secondary_muscles.forEach((muscle) => {
-        effectiveByMuscle.set(muscle, (effectiveByMuscle.get(muscle) ?? 0) + 0.45);
-      });
-    });
-
-    const totalTargetSets = items.reduce((sum, item) => sum + item.sets, 0);
+    const total = countPlanSets(items);
+    const completed = completedLogs.length;
     return {
-      completedSetCount: completed.length,
-      totalTargetSets,
-      percent:
-        totalTargetSets === 0
-          ? 0
-          : Math.min(100, Math.round((completed.length / totalTargetSets) * 100)),
-      loggedByExercise,
-      effectiveByMuscle
+      completed,
+      total,
+      percent: total === 0 ? 0 : Math.min(100, Math.round((completed / total) * 100))
     };
-  }, [items, sessionLogs]);
+  }, [completedLogs.length, items]);
 
-  function commitRevision({
-    nextState,
-    nextSnapshot,
-    planItems,
-    triggerType,
-    triggerPayload
-  }: {
-    nextState: DailyPlanningState;
-    nextSnapshot: Snapshot;
-    planItems: WorkoutPlanItem[];
-    triggerType: string;
-    triggerPayload: unknown;
-  }) {
+  const currentIndex = useMemo(() => {
+    if (!session?.currentItemId) return 0;
+    return Math.max(0, items.findIndex((item) => item.id === session.currentItemId));
+  }, [items, session?.currentItemId]);
+  const currentItem = items[currentIndex] ?? items[0] ?? null;
+  const restLeft = secondsLeft(session?.restEndsAt ?? null);
+  void now;
+
+  function persistSession(nextSession: WorkoutUiSession) {
+    setSession(nextSession);
+    saveWorkoutSession(nextSession);
+  }
+
+  function commitRevision(planItems: WorkoutPlanItem[], triggerType: string, triggerPayload: unknown, nextState = state, nextSnapshot = snapshot) {
+    if (!nextState || !nextSnapshot) return;
     const planSnapshot: WorkoutPlan = {
       ...nextSnapshot.plan,
       items: planItems
     };
-
     appendDailyPlanRevision({
       id: makeId("revision"),
       date: nextState.date,
@@ -165,196 +138,150 @@ export function WorkoutPlanner() {
     });
   }
 
-  function refreshPlan(nextState: DailyPlanningState, decision?: DailyTrainingDecision | null) {
-    const nextSnapshot = buildDailyPlanSnapshot(nextState, decision ?? null);
-    setState(nextState);
-    setSnapshot(nextSnapshot);
-    setItems(nextSnapshot.plan.items);
-    return nextSnapshot;
+  function startWorkout() {
+    if (!state || !currentItem) return;
+    persistSession({
+      date: state.date,
+      status: "in_progress",
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      currentItemId: currentItem.id,
+      currentSetIndex: 1,
+      restEndsAt: null,
+      draft: defaultDraft(currentItem)
+    });
   }
 
-  function replaceItem(item: WorkoutPlanItem, avoidCurrentEquipment: boolean) {
-    if (!state || !snapshot) return;
-    const replacement = findReplacementExercise({
-      currentItem: item,
-      input: snapshot.input,
-      equipment: state.equipment,
-      excludedExerciseIds: items.map((planItem) => planItem.exercise.id),
-      avoidCurrentEquipment,
-      forbiddenMuscles: snapshot.context.hardConstraints.forbiddenMuscles,
-      forbiddenMovementFamilies: snapshot.context.hardConstraints.forbiddenMovementFamilies
+  function endWorkout(completed = false) {
+    if (!state || !session) return;
+    persistSession({
+      ...session,
+      status: completed ? "completed" : "idle",
+      completedAt: completed ? new Date().toISOString() : null,
+      restEndsAt: null
     });
-
-    if (!replacement) {
-      setMessage("같은 목적을 만족하는 대체 운동을 찾지 못했습니다.");
-      return;
-    }
-
-    const nextItems = items.map((planItem) => (planItem.id === item.id ? replacement : planItem));
-    setItems(nextItems);
-    commitRevision({
-      nextState: state,
-      nextSnapshot: snapshot,
-      planItems: nextItems,
-      triggerType: "exercise_replaced",
-      triggerPayload: { from: item.exercise.id, to: replacement.exercise.id }
-    });
-    setMessage(`${replacement.exercise.name}로 교체했습니다.`);
+    setMessage(completed ? "오늘 운동을 완료했습니다." : "운동을 종료했습니다. 기록은 저장되어 있습니다.");
   }
 
-  function markEquipmentUnavailable(item: WorkoutPlanItem) {
-    if (!state || !snapshot) return;
-    const equipmentIds = item.equipment.map((equipment) => equipment.id);
-    const nextEquipment = state.equipment.map((equipment) =>
-      equipmentIds.includes(equipment.id) ? { ...equipment, is_available: false } : equipment
-    );
-    const nextState = { ...state, equipment: nextEquipment };
-    saveEquipment(nextEquipment);
-    setState(nextState);
-
-    const replacement = findReplacementExercise({
-      currentItem: item,
-      input: {
-        ...snapshot.input,
-        temporarilyUnavailableEquipmentIds: [
-          ...snapshot.input.temporarilyUnavailableEquipmentIds,
-          ...equipmentIds
-        ]
-      },
-      equipment: nextEquipment,
-      excludedExerciseIds: items.map((planItem) => planItem.exercise.id),
-      avoidCurrentEquipment: true,
-      forbiddenMuscles: snapshot.context.hardConstraints.forbiddenMuscles,
-      forbiddenMovementFamilies: snapshot.context.hardConstraints.forbiddenMovementFamilies
-    });
-
-    const nextItems = replacement
-      ? items.map((planItem) => (planItem.id === item.id ? replacement : planItem))
-      : items.filter((planItem) => planItem.id !== item.id);
-    setItems(nextItems);
-    commitRevision({
-      nextState,
-      nextSnapshot: snapshot,
-      planItems: nextItems,
-      triggerType: "equipment_unavailable",
-      triggerPayload: { equipmentIds, replacementExerciseId: replacement?.exercise.id ?? null }
-    });
-    setMessage(
-      replacement
-        ? `${item.equipment[0]?.name ?? "기구"} 사용 불가를 반영해 ${replacement.exercise.name}로 바꿨습니다.`
-        : "기구 사용 불가를 반영해 해당 운동을 제외했습니다."
-    );
+  function updateDraft(patch: Partial<WorkoutUiSession["draft"]>) {
+    if (!session) return;
+    persistSession({ ...session, draft: { ...session.draft, ...patch } });
   }
 
-  function adjustItem(item: WorkoutPlanItem, direction: "down" | "up") {
-    const nextItem = adjustRecommendedWeight(item, direction);
-    const nextItems = items.map((planItem) => (planItem.id === item.id ? nextItem : planItem));
+  function moveItem(itemId: string, direction: "up" | "down") {
+    const index = items.findIndex((item) => item.id === itemId);
+    const nextIndex = direction === "up" ? index - 1 : index + 1;
+    if (index < 0 || nextIndex < 0 || nextIndex >= items.length) return;
+    const nextItems = items.slice();
+    [nextItems[index], nextItems[nextIndex]] = [nextItems[nextIndex], nextItems[index]];
     setItems(nextItems);
-    if (state && snapshot) {
-      commitRevision({
-        nextState: state,
-        nextSnapshot: snapshot,
-        planItems: nextItems,
-        triggerType: direction === "down" ? "too_heavy" : "too_easy",
-        triggerPayload: { exerciseId: item.exercise.id }
+    commitRevision(nextItems, "workout_order_changed", { itemId, direction });
+  }
+
+  function candidatesFor(item: WorkoutPlanItem, intent: ReplacementIntent) {
+    if (!state || !snapshot) return [];
+    const candidates: WorkoutPlanItem[] = [];
+    const excluded = new Set(items.map((planItem) => planItem.exercise.id));
+    for (let index = 0; index < 3; index += 1) {
+      const candidate = findReplacementExercise({
+        currentItem: item,
+        input: snapshot.input,
+        equipment: state.equipment,
+        excludedExerciseIds: Array.from(excluded),
+        avoidCurrentEquipment: intent === "unavailable",
+        forbiddenMuscles: snapshot.context.hardConstraints.forbiddenMuscles,
+        forbiddenMovementFamilies: snapshot.context.hardConstraints.forbiddenMovementFamilies
       });
+      if (!candidate) break;
+      candidates.push(candidate);
+      excluded.add(candidate.exercise.id);
     }
+    return candidates;
   }
 
-  function skipItem(item: WorkoutPlanItem) {
-    if (!state || !snapshot) return;
-    const skipped: WorkoutSetLog = {
-      id: makeId("set"),
-      performedAt: new Date().toISOString(),
-      exerciseId: item.exercise.id,
-      equipmentId: item.equipment[0]?.id ?? "",
-      weight: 0,
-      reps: 0,
-      rir: null,
-      rpe: null,
-      isFailure: false,
-      wasCompleted: false,
-      wasSkipped: true,
-      replacementReason: "사용자가 운동을 스킵했습니다.",
-      notes: ""
-    };
-    const allLogs = [...state.workoutLogs, skipped];
-    saveWorkoutLogs(allLogs);
-    const nextState = { ...state, workoutLogs: allLogs };
-    const nextItems = items.filter((planItem) => planItem.id !== item.id);
-    setState(nextState);
+  function openReplacement(item: WorkoutPlanItem, intent: ReplacementIntent) {
+    setReplacement({ item, intent, candidates: candidatesFor(item, intent) });
+  }
+
+  function applyReplacement(nextItem: WorkoutPlanItem) {
+    if (!replacement || !state || !session) return;
+    let nextEquipment: Equipment[] | null = null;
+    if (replacement.intent === "unavailable") {
+      const unavailableIds = new Set(replacement.item.equipment.map((equipment) => equipment.id));
+      nextEquipment = state.equipment.map((equipment) =>
+        unavailableIds.has(equipment.id) ? { ...equipment, is_available: false } : equipment
+      );
+      saveEquipment(nextEquipment);
+    }
+    const nextItems = items.map((item) => (item.id === replacement.item.id ? nextItem : item));
     setItems(nextItems);
-    setSessionLogs((current) => [...current, skipped]);
-    commitRevision({
-      nextState,
-      nextSnapshot: snapshot,
-      planItems: nextItems,
-      triggerType: "exercise_skipped",
-      triggerPayload: { exerciseId: item.exercise.id }
-    });
-    setMessage(`${item.exercise.name}을 오늘 루틴에서 제외했습니다.`);
+    const nextState = nextEquipment ? { ...state, equipment: nextEquipment } : state;
+    setState(nextState);
+    if (session.currentItemId === replacement.item.id) {
+      persistSession({ ...session, currentItemId: nextItem.id, draft: defaultDraft(nextItem) });
+    }
+    commitRevision(nextItems, replacement.intent === "unavailable" ? "equipment_unavailable" : "exercise_replaced", {
+      from: replacement.item.exercise.id,
+      to: nextItem.exercise.id
+    }, nextState);
+    setReplacement(null);
+    setMessage(`${nextItem.exercise.name}로 교체했습니다.`);
   }
 
-  function avoidMuscleForToday(item: WorkoutPlanItem) {
+  function adjustItem(direction: "down" | "up", item = currentItem) {
+    if (!item) return;
+    const nextItem = adjustRecommendedWeight(item, direction);
+    const nextItems = items.map((candidate) => (candidate.id === item.id ? nextItem : candidate));
+    setItems(nextItems);
+    if (session?.currentItemId === item.id) {
+      persistSession({ ...session, draft: { ...session.draft, weight: String(nextItem.recommended_weight_lbs ?? "") } });
+    }
+    commitRevision(nextItems, direction === "down" ? "too_heavy" : "too_easy", { exerciseId: item.exercise.id });
+  }
+
+  function removeItem(item: WorkoutPlanItem, reason = "exercise_avoided_today") {
+    if (!session) return;
+    const nextItems = items.filter((candidate) => candidate.id !== item.id);
+    setItems(nextItems);
+    const nextCurrent = session.currentItemId === item.id ? nextItems[currentIndex] ?? nextItems[currentIndex - 1] ?? null : null;
+    persistSession({
+      ...session,
+      currentItemId: nextCurrent ? nextCurrent.id : session.currentItemId,
+      draft: nextCurrent ? defaultDraft(nextCurrent) : session.draft
+    });
+    commitRevision(nextItems, reason, { exerciseId: item.exercise.id });
+  }
+
+  function avoidMuscleToday(item: WorkoutPlanItem) {
     if (!state) return;
     const part = item.exercise.primary_muscle as AvoidableBodyPart;
-    const avoidMusclesToday = state.checkIn.avoidMusclesToday.includes(part)
-      ? state.checkIn.avoidMusclesToday
-      : toggleBodyPart(state.checkIn.avoidMusclesToday, part);
-    const nextCheckIn = { ...state.checkIn, avoidMusclesToday };
+    const nextCheckIn = {
+      ...state.checkIn,
+      avoidMusclesToday: state.checkIn.avoidMusclesToday.includes(part)
+        ? state.checkIn.avoidMusclesToday
+        : toggleBodyPart(state.checkIn.avoidMusclesToday, part)
+    };
     saveDailyCheckIn(nextCheckIn);
-    const nextState = { ...state, checkIn: nextCheckIn };
-    const nextSnapshot = refreshPlan(nextState, null);
-    commitRevision({
-      nextState,
-      nextSnapshot,
-      planItems: nextSnapshot.plan.items,
-      triggerType: "avoid_muscle_added",
-      triggerPayload: { muscle: part }
-    });
-    setMessage(`${formatBodyPart(part)}를 오늘 제외하고 남은 루틴을 다시 만들었습니다.`);
+    setState({ ...state, checkIn: nextCheckIn });
+    removeItem(item, "avoid_muscle_added");
+    setMessage(`${formatBodyPart(part)}는 오늘 제외했습니다.`);
   }
 
-  function removeExerciseOnly(item: WorkoutPlanItem) {
-    const nextItems = items.filter((planItem) => planItem.id !== item.id);
-    setItems(nextItems);
-    if (state && snapshot) {
-      commitRevision({
-        nextState: state,
-        nextSnapshot: snapshot,
-        planItems: nextItems,
-        triggerType: "exercise_avoided_today",
-        triggerPayload: { exerciseId: item.exercise.id }
-      });
-    }
-    setMessage(`${item.exercise.name}만 오늘 제외했습니다.`);
-  }
-
-  function updateDraft(itemId: string, patch: Partial<SetDraft>) {
-    setSetDrafts((current) => ({
-      ...current,
-      [itemId]: { ...(current[itemId] ?? emptySetDraft), ...patch }
-    }));
-  }
-
-  function logSet(item: WorkoutPlanItem) {
-    if (!state || !snapshot) return;
-    const draft = setDrafts[item.id] ?? emptySetDraft;
-    const weight = numberOrZero(draft.weight || String(item.recommended_weight_lbs ?? 0));
-    const reps = numberOrZero(draft.reps);
-    const rir = nullableNumber(draft.rir);
-    const rpe = nullableNumber(draft.rpe);
-
+  function completeSet() {
+    if (!state || !session || !currentItem) return;
+    const reps = numeric(session.draft.reps, 0);
     if (reps <= 0) {
-      setMessage("반복수를 입력한 뒤 세트를 저장하세요.");
+      setMessage("반복수를 입력하면 세트를 저장할 수 있습니다.");
       return;
     }
-
+    const weight = numeric(session.draft.weight, currentItem.recommended_weight_lbs ?? 0);
+    const rir = nullable(session.draft.rir);
+    const rpe = nullable(session.draft.rpe);
     const log: WorkoutSetLog = {
       id: makeId("set"),
       performedAt: new Date().toISOString(),
-      exerciseId: item.exercise.id,
-      equipmentId: item.equipment[0]?.id ?? "",
+      exerciseId: currentItem.exercise.id,
+      equipmentId: currentItem.equipment[0]?.id ?? "",
       weight,
       reps,
       rir,
@@ -369,308 +296,328 @@ export function WorkoutPlanner() {
     const nextState = { ...state, workoutLogs: allLogs };
     saveWorkoutLogs(allLogs);
     setState(nextState);
-    setSessionLogs((current) => [...current, log]);
-    setSetDrafts((current) => ({ ...current, [item.id]: emptySetDraft }));
-    commitRevision({
-      nextState,
-      nextSnapshot: snapshot,
-      planItems: items,
-      triggerType: "workout_set_logged",
-      triggerPayload: { exerciseId: item.exercise.id, weight, reps, rir, rpe }
-    });
-    setMessage(`${item.exercise.name} 세트를 저장했습니다.`);
+
+    const nextSetIndex = session.currentSetIndex + 1;
+    const restEndsAt = new Date(Date.now() + currentItem.rest_seconds * 1000).toISOString();
+    if (nextSetIndex <= currentItem.sets) {
+      persistSession({
+        ...session,
+        currentSetIndex: nextSetIndex,
+        restEndsAt,
+        draft: { ...session.draft, weight: String(weight), reps: String(reps), rir: "2" }
+      });
+    } else {
+      const nextItem = items[currentIndex + 1] ?? null;
+      if (nextItem) {
+        persistSession({
+          ...session,
+          currentItemId: nextItem.id,
+          currentSetIndex: 1,
+          restEndsAt,
+          draft: defaultDraft(nextItem)
+        });
+      } else {
+        persistSession({
+          ...session,
+          status: "completed",
+          completedAt: new Date().toISOString(),
+          restEndsAt: null
+        });
+        setMessage("오늘 루틴을 모두 완료했습니다.");
+      }
+    }
+    commitRevision(items, "workout_set_logged", { exerciseId: currentItem.exercise.id, weight, reps, rir, rpe }, nextState);
   }
 
-  if (!state || !snapshot) {
-    return <div className="text-sm text-slate-600">오늘 루틴을 불러오는 중입니다.</div>;
+  if (!state || !snapshot || !session) {
+    return (
+      <div className="space-y-4">
+        <div className="h-40 animate-pulse rounded-md bg-white shadow-soft" />
+        <div className="h-72 animate-pulse rounded-md bg-white shadow-soft" />
+      </div>
+    );
   }
 
-  const { decision, context } = snapshot;
-  const excludedLabels = decision.excludedMuscles
-    .slice(0, 8)
-    .map((item) => `${formatBodyPart(item.muscle)}: ${item.reason}`);
+  const focus = summarizeFocusMuscles(snapshot.decision);
+
+  if (session.status === "in_progress" && currentItem) {
+    const lastSet = getRecentSet(state.workoutLogs.filter((log) => !log.performedAt.startsWith(state.date)), currentItem);
+    const itemProgress = `${currentIndex + 1} / ${items.length}`;
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col bg-ink text-white">
+        <header className="border-b border-white/10 px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
+          <div className="flex items-center justify-between gap-3">
+            <button type="button" onClick={() => endWorkout(false)} className="grid size-11 place-items-center rounded-md bg-white/10" aria-label="운동 종료">
+              <ArrowLeft size={20} aria-hidden />
+            </button>
+            <div className="text-center">
+              <p className="text-xs font-semibold text-slate-400">현재 진행 {itemProgress}</p>
+              <p className="text-sm font-semibold">{progress.completed}/{progress.total}세트</p>
+            </div>
+            <button type="button" onClick={() => endWorkout(true)} className="grid size-11 place-items-center rounded-md bg-white/10" aria-label="완료">
+              <Check size={20} aria-hidden />
+            </button>
+          </div>
+          <div className="mt-3 h-2 rounded-full bg-white/10">
+            <div className="h-2 rounded-full bg-mint" style={{ width: `${progress.percent}%` }} />
+          </div>
+        </header>
+
+        <main className="flex-1 overflow-y-auto px-4 py-5">
+          {restLeft > 0 ? (
+            <div className="mb-4 rounded-md bg-white/10 px-4 py-3">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+                  <Timer size={17} aria-hidden />
+                  휴식
+                </span>
+                <span className="text-3xl font-bold tabular-nums">{restLeft}s</span>
+              </div>
+            </div>
+          ) : null}
+
+          <section className="rounded-md bg-white p-4 text-ink">
+            <p className="text-xs font-semibold uppercase tracking-wide text-mint">{formatBodyPart(currentItem.exercise.primary_muscle)}</p>
+            <h1 className="mt-2 text-3xl font-semibold">{currentItem.exercise.name}</h1>
+            <p className="mt-2 text-sm font-medium text-slate-600">
+              {currentItem.equipment.map((equipment) => equipment.name).join(", ")}
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Info label="오늘 추천" value={`${currentItem.recommended_weight_lbs ?? 0}lb · ${currentItem.rep_min}-${currentItem.rep_max}회`} />
+              <Info label="현재 세트" value={`${session.currentSetIndex}/${currentItem.sets}`} />
+              <Info label="지난 기록" value={lastSet ? `${lastSet.weight}lb × ${lastSet.reps}` : "첫 기록"} />
+              <Info label="강도" value={intensityLabels[snapshot.decision.overallIntensity]} />
+            </div>
+          </section>
+
+          <section className="mt-4 rounded-md bg-white p-4 text-ink">
+            <div className="grid gap-3">
+              <Stepper label="중량" value={session.draft.weight} suffix="lb" step={5} onChange={(weight) => updateDraft({ weight })} />
+              <Stepper label="반복수" value={session.draft.reps} step={1} onChange={(reps) => updateDraft({ reps })} />
+              <Stepper label="RIR" value={session.draft.rir} step={1} onChange={(rir) => updateDraft({ rir })} />
+            </div>
+          </section>
+
+          <section className="mt-4 grid grid-cols-2 gap-2">
+            <FocusAction icon={AlertTriangle} label="자리 없음" onClick={() => openReplacement(currentItem, "unavailable")} />
+            <FocusAction icon={RefreshCcw} label="운동 교체" onClick={() => openReplacement(currentItem, "swap")} />
+            <FocusAction icon={ArrowDown} label="너무 무거움" onClick={() => adjustItem("down")} />
+            <FocusAction icon={ArrowUp} label="너무 쉬움" onClick={() => adjustItem("up")} />
+            <FocusAction icon={Ban} label="건너뛰기" onClick={() => removeItem(currentItem, "exercise_skipped")} />
+            <FocusAction icon={X} label="부위 제외" onClick={() => avoidMuscleToday(currentItem)} />
+          </section>
+
+          {message ? <p className="mt-4 rounded-md bg-white/10 px-3 py-2 text-sm font-semibold text-white">{message}</p> : null}
+        </main>
+
+        <footer className="border-t border-white/10 bg-ink px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">
+          <button type="button" onClick={completeSet} className="min-h-14 w-full rounded-md bg-mint text-lg font-bold text-white">
+            세트 완료
+          </button>
+        </footer>
+
+        <ReplacementSheet replacement={replacement} onClose={() => setReplacement(null)} onPick={applyReplacement} />
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-mint">오늘 AI가 정한 운동</p>
-          <h1 className="mt-1 text-2xl font-semibold md:text-3xl">{decision.sessionTitle}</h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-            {decision.reasoningSummary[0] ?? "오늘 체크인과 최근 기록을 기준으로 부위 중심 루틴을 만들었습니다."}
-          </p>
+    <div className="space-y-4">
+      <section className="rounded-md bg-ink p-5 text-white shadow-soft">
+        <p className="text-xs font-semibold uppercase tracking-wide text-mint">오늘 운동</p>
+        <h1 className="mt-2 text-3xl font-semibold">{focus}</h1>
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <DarkMini label="예상" value={formatMinutes(snapshot.decision.estimatedDurationMinutes)} />
+          <DarkMini label="운동" value={`${items.length}개`} />
+          <DarkMini label="세트" value={`${countPlanSets(items)}세트`} />
         </div>
-        <div className="rounded-md border border-line bg-white px-4 py-3 shadow-soft">
-          <p className="text-xs font-semibold text-slate-500">진행률</p>
-          <p className="mt-1 text-2xl font-semibold">{progress.percent}%</p>
-          <p className="text-xs text-slate-500">
-            예상 종료 {estimateEndTime(items, progress.completedSetCount)}
-          </p>
-        </div>
-      </div>
-
-      <section className="grid gap-3 md:grid-cols-4">
-        <Metric label="강도" value={decision.overallIntensity} />
-        <Metric label="예상 시간" value={`${decision.estimatedDurationMinutes}분`} />
-        <Metric label="목표 세트" value={`${progress.totalTargetSets}세트`} />
-        <Metric label="기구 모드" value={context.hardConstraints.equipmentMode} />
       </section>
 
       <section className="rounded-md border border-line bg-white p-4 shadow-soft">
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-mint">선택된 부위</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {decision.selectedMuscles.map((muscle) => (
-                <span key={muscle.muscle} className="rounded-md bg-panel px-2 py-1 text-xs font-semibold">
-                  {formatBodyPart(muscle.muscle)} {muscle.targetEffectiveSets}세트
-                </span>
-              ))}
-            </div>
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-mint">제외된 부위</p>
-            <div className="mt-2 space-y-1">
-              {(excludedLabels.length > 0
-                ? excludedLabels
-                : context.hardConstraints.forbiddenMuscles.map((part) => formatBodyPart(part))
-              ).map((label) => (
-                <p key={label} className="rounded-md bg-rose-50 px-2 py-1 text-xs font-medium text-coral">
-                  {label}
+        <div className="grid gap-3">
+          <SummaryRow label="선택된 부위" value={focus} />
+          <SummaryRow
+            label="제외된 부위"
+            value={
+              snapshot.decision.excludedMuscles.length > 0
+                ? snapshot.decision.excludedMuscles.slice(0, 4).map((item) => formatBodyPart(item.muscle)).join(" · ")
+                : "없음"
+            }
+          />
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        {items.map((item, index) => (
+          <article key={item.id} className="rounded-md border border-line bg-white p-4 shadow-soft">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-500">{index + 1}번째</p>
+                <h2 className="mt-1 truncate text-lg font-semibold">{item.exercise.name}</h2>
+                <p className="mt-1 text-sm text-slate-600">{item.equipment.map((equipment) => equipment.name).join(", ")}</p>
+                <p className="mt-2 text-sm font-medium text-slate-700">
+                  {item.sets}세트 · {item.rep_min}-{item.rep_max}회 · {formatBodyPart(item.exercise.primary_muscle)}
                 </p>
-              ))}
+              </div>
+              <div className="flex shrink-0 gap-1">
+                <button type="button" onClick={() => moveItem(item.id, "up")} className="grid size-10 place-items-center rounded-md bg-panel" aria-label="순서 올리기">
+                  <ArrowUp size={16} aria-hidden />
+                </button>
+                <button type="button" onClick={() => moveItem(item.id, "down")} className="grid size-10 place-items-center rounded-md bg-panel" aria-label="순서 내리기">
+                  <ArrowDown size={16} aria-hidden />
+                </button>
+              </div>
             </div>
-          </div>
+            <div className="mt-3 flex gap-2">
+              <button type="button" onClick={() => openReplacement(item, "swap")} className="min-h-10 flex-1 rounded-md border border-line bg-panel px-3 text-sm font-semibold text-slate-700">
+                운동 교체
+              </button>
+              <button type="button" onClick={() => removeItem(item)} className="min-h-10 flex-1 rounded-md border border-line bg-panel px-3 text-sm font-semibold text-slate-700">
+                오늘 제외
+              </button>
+            </div>
+          </article>
+        ))}
+      </section>
+
+      {items.length === 0 ? (
+        <div className="rounded-md border border-line bg-white p-6 text-sm leading-6 text-slate-600 shadow-soft">
+          오늘 조건에서는 실행 가능한 운동이 없습니다. Today에서 피할 부위를 줄이거나 휴식을 선택하세요.
         </div>
-        <div className="mt-4 grid gap-2 md:grid-cols-3">
-          {decision.reasoningSummary.slice(0, 6).map((reason) => (
-            <p key={reason} className="rounded-md bg-panel px-3 py-2 text-sm leading-6 text-slate-700">
-              {reason}
+      ) : null}
+
+      <div className="sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-20 md:bottom-4">
+        <button type="button" onClick={startWorkout} disabled={items.length === 0} className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-md bg-ink px-4 text-base font-semibold text-white shadow-soft disabled:opacity-50">
+          <Dumbbell size={19} aria-hidden />
+          운동 시작
+        </button>
+      </div>
+
+      {message ? <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">{message}</p> : null}
+      <ReplacementSheet replacement={replacement} onClose={() => setReplacement(null)} onPick={applyReplacement} />
+    </div>
+  );
+}
+
+function ReplacementSheet({
+  replacement,
+  onClose,
+  onPick
+}: {
+  replacement: { item: WorkoutPlanItem; intent: ReplacementIntent; candidates: WorkoutPlanItem[] } | null;
+  onClose: () => void;
+  onPick: (item: WorkoutPlanItem) => void;
+}) {
+  if (!replacement) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end bg-black/40 p-3">
+      <section className="w-full rounded-t-md bg-white p-4 text-ink shadow-soft md:mx-auto md:max-w-lg md:rounded-md">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-mint">대체 운동</p>
+            <h2 className="text-lg font-semibold">{replacement.item.exercise.name}</h2>
+          </div>
+          <button type="button" onClick={onClose} className="grid size-10 place-items-center rounded-md bg-panel">
+            <X size={18} aria-hidden />
+          </button>
+        </div>
+        <div className="mt-4 space-y-2">
+          {replacement.candidates.length > 0 ? (
+            replacement.candidates.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                onClick={() => onPick(candidate)}
+                className="w-full rounded-md border border-line bg-white p-3 text-left"
+              >
+                <p className="font-semibold">{candidate.exercise.name}</p>
+                <p className="mt-1 text-sm text-slate-600">{candidate.equipment.map((equipment) => equipment.name).join(", ")}</p>
+                <p className="mt-2 text-xs font-semibold text-mint">
+                  {candidate.exercise.primary_muscle === replacement.item.exercise.primary_muscle ? "동일 부위" : "보조 부위 대체"} · {candidate.reason.split(".")[0]}
+                </p>
+              </button>
+            ))
+          ) : (
+            <p className="rounded-md bg-panel px-3 py-3 text-sm leading-6 text-slate-600">
+              등록된 사용 가능 기구 안에서 대체 운동을 찾지 못했습니다.
             </p>
-          ))}
+          )}
         </div>
-      </section>
-
-      {context.hardConstraints.painMuscles.length > 0 ? (
-        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
-          통증으로 기록된 부위는 제외했습니다. 통증이 강하거나 지속되면 운동을 중단하고 전문가 상담을 고려하세요.
-        </p>
-      ) : null}
-
-      {message ? (
-        <p className="rounded-md border border-line bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-soft">
-          {message}
-        </p>
-      ) : null}
-
-      <section className="grid gap-4 lg:grid-cols-[1.5fr_0.8fr]">
-        <div className="space-y-3">
-          {items.map((item) => {
-            const draft = setDrafts[item.id] ?? emptySetDraft;
-            const loggedSets = progress.loggedByExercise.get(item.exercise.id) ?? 0;
-            const muscleAvoided = context.hardConstraints.forbiddenMuscles.some((muscle) =>
-              itemTouchesMuscle(item, muscle)
-            );
-
-            return (
-              <article key={item.id} className="rounded-md border border-line bg-white p-4 shadow-soft">
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-mint">
-                      {item.slot.label}
-                    </p>
-                    <h2 className="mt-1 text-xl font-semibold">{item.exercise.name}</h2>
-                    <p className="mt-1 text-sm text-slate-600">
-                      {item.equipment.map((equipment) => equipment.name).join(", ")}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    <Badge>{formatBodyPart(item.exercise.primary_muscle)}</Badge>
-                    <Badge>{titleCase(item.exercise.movement_family)}</Badge>
-                    <Badge>
-                      {loggedSets}/{item.sets}세트
-                    </Badge>
-                  </div>
-                </div>
-
-                <div className="mt-3 grid gap-3 md:grid-cols-4">
-                  <Mini label="반복" value={`${item.rep_min}-${item.rep_max}회`} />
-                  <Mini label="추천 중량" value={item.recommended_weight_lbs ? `${item.recommended_weight_lbs} lb` : "-"} />
-                  <Mini label="휴식" value={`${item.rest_seconds}초`} />
-                  <Mini label="점수" value={String(Math.round(item.score))} />
-                </div>
-
-                <p className="mt-3 text-sm leading-6 text-slate-600">{item.reason}</p>
-
-                {muscleAvoided ? (
-                  <p className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-sm font-medium text-coral">
-                    현재 hard constraint와 겹치는 운동입니다. 재계획을 권장합니다.
-                  </p>
-                ) : null}
-
-                <div className="mt-4 grid gap-2 md:grid-cols-4">
-                  <Input
-                    label="중량"
-                    value={draft.weight}
-                    placeholder={item.recommended_weight_lbs ? String(item.recommended_weight_lbs) : "0"}
-                    onChange={(weight) => updateDraft(item.id, { weight })}
-                  />
-                  <Input
-                    label="반복"
-                    value={draft.reps}
-                    placeholder={String(item.rep_max)}
-                    onChange={(reps) => updateDraft(item.id, { reps })}
-                  />
-                  <Input
-                    label="RIR"
-                    value={draft.rir}
-                    placeholder="2"
-                    onChange={(rir) => updateDraft(item.id, { rir })}
-                  />
-                  <Input
-                    label="RPE"
-                    value={draft.rpe}
-                    placeholder="8"
-                    onChange={(rpe) => updateDraft(item.id, { rpe })}
-                  />
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <ActionButton icon={Save} label="세트 저장" onClick={() => logSet(item)} />
-                  <ActionButton icon={AlertTriangle} label="기구 사용 불가" onClick={() => markEquipmentUnavailable(item)} />
-                  <ActionButton icon={RefreshCcw} label="운동 교체" onClick={() => replaceItem(item, false)} />
-                  <ActionButton icon={TrendingDown} label="무거움" onClick={() => adjustItem(item, "down")} />
-                  <ActionButton icon={TrendingUp} label="쉬움" onClick={() => adjustItem(item, "up")} />
-                  <ActionButton icon={Ban} label="스킵" onClick={() => skipItem(item)} />
-                </div>
-
-                <div className="mt-3 flex flex-wrap gap-2 border-t border-line pt-3">
-                  <ActionButton icon={Ban} label="이 운동만 제외" onClick={() => removeExerciseOnly(item)} />
-                  <ActionButton icon={Dumbbell} label="이 기구 제외" onClick={() => markEquipmentUnavailable(item)} />
-                  <ActionButton icon={RotateCcw} label="부위 전체 제외" onClick={() => avoidMuscleForToday(item)} />
-                </div>
-              </article>
-            );
-          })}
-
-          {items.length === 0 ? (
-            <div className="rounded-md border border-line bg-white p-6 text-sm text-slate-600 shadow-soft">
-              오늘 조건에서는 실행 가능한 운동이 없습니다. 체크인에서 금지 부위를 줄이거나 휴식을 선택하세요.
-            </div>
-          ) : null}
-        </div>
-
-        <aside className="space-y-3">
-          <div className="rounded-md border border-line bg-white p-4 shadow-soft">
-            <p className="text-xs font-semibold uppercase tracking-wide text-mint">부위별 실제 유효 세트</p>
-            <div className="mt-3 space-y-2">
-              {decision.selectedMuscles.map((target) => {
-                const done = progress.effectiveByMuscle.get(target.muscle) ?? 0;
-                return (
-                  <div key={target.muscle}>
-                    <div className="flex items-center justify-between text-sm">
-                      <span>{formatBodyPart(target.muscle)}</span>
-                      <span className="font-semibold">
-                        {Math.round(done * 10) / 10}/{target.targetEffectiveSets}
-                      </span>
-                    </div>
-                    <div className="mt-1 h-2 rounded-full bg-panel">
-                      <div
-                        className="h-2 rounded-full bg-mint"
-                        style={{
-                          width: `${Math.min(100, (done / Math.max(1, target.targetEffectiveSets)) * 100)}%`
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="rounded-md border border-line bg-white p-4 shadow-soft">
-            <p className="text-xs font-semibold uppercase tracking-wide text-mint">오늘 반영한 근거</p>
-            <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
-              <li>최근 운동 이력: {decision.evidenceKeys.includes("muscleHistory.weeklyVolumeDeficit") ? "부위별 볼륨 부족분 반영" : "요약 데이터 반영"}</li>
-              <li>인바디: {context.inBodyTrend.summary[0] ?? "기록 부족"}</li>
-              <li>일정: {state.checkIn.scheduleConstraints.length}개 제약 반영</li>
-              <li>금지 부위: {context.hardConstraints.forbiddenMuscles.length}개 hard constraint</li>
-            </ul>
-          </div>
-        </aside>
       </section>
     </div>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Stepper({
+  label,
+  value,
+  suffix = "",
+  step,
+  onChange
+}: {
+  label: string;
+  value: string;
+  suffix?: string;
+  step: number;
+  onChange: (value: string) => void;
+}) {
+  const current = numeric(value, 0);
   return (
-    <div className="rounded-md border border-line bg-white p-4 shadow-soft">
-      <p className="text-xs font-semibold text-slate-500">{label}</p>
-      <p className="mt-2 text-lg font-semibold">{value}</p>
+    <div>
+      <p className="text-sm font-semibold text-slate-600">{label}</p>
+      <div className="mt-2 grid grid-cols-[3rem_1fr_3rem] gap-2">
+        <button type="button" onClick={() => onChange(String(Math.max(0, current - step)))} className="min-h-12 rounded-md bg-panel text-2xl font-semibold">
+          -
+        </button>
+        <div className="relative">
+          <input
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            inputMode="decimal"
+            className="min-h-12 w-full rounded-md border border-line bg-white px-3 text-center text-2xl font-bold"
+          />
+          {suffix ? <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">{suffix}</span> : null}
+        </div>
+        <button type="button" onClick={() => onChange(String(current + step))} className="min-h-12 rounded-md bg-panel text-2xl font-semibold">
+          +
+        </button>
+      </div>
     </div>
   );
 }
 
-function Badge({ children }: { children: ReactNode }) {
+function Info({ label, value }: { label: string; value: string }) {
   return (
-    <span className="rounded-md bg-panel px-2 py-1 text-xs font-semibold text-slate-600">
-      {children}
-    </span>
-  );
-}
-
-function Mini({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md bg-panel px-2 py-2">
+    <div className="rounded-md bg-panel px-3 py-2">
       <p className="text-[11px] font-semibold text-slate-500">{label}</p>
       <p className="mt-1 text-sm font-semibold">{value}</p>
     </div>
   );
 }
 
-function Input({
-  label,
-  value,
-  placeholder,
-  onChange
-}: {
-  label: string;
-  value: string;
-  placeholder: string;
-  onChange: (value: string) => void;
-}) {
+function FocusAction({ icon: Icon, label, onClick }: { icon: typeof Dumbbell; label: string; onClick: () => void }) {
   return (
-    <label className="text-sm font-medium text-slate-700">
+    <button type="button" onClick={onClick} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md bg-white/10 px-3 text-sm font-semibold text-white">
+      <Icon size={17} aria-hidden />
       {label}
-      <input
-        type="number"
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        className="mt-1 min-h-10 w-full rounded-md border border-line bg-panel px-3 text-sm text-ink"
-      />
-    </label>
+    </button>
   );
 }
 
-function ActionButton({
-  icon: Icon,
-  label,
-  onClick
-}: {
-  icon: ComponentType<{ size?: number; "aria-hidden"?: boolean }>;
-  label: string;
-  onClick: () => void;
-}) {
+function DarkMini({ label, value }: { label: string; value: string }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-line bg-panel px-3 text-sm font-semibold text-slate-700"
-    >
-      <Icon size={16} aria-hidden />
-      {label}
-    </button>
+    <div className="rounded-md bg-white/10 px-3 py-2">
+      <p className="text-[11px] font-semibold text-slate-400">{label}</p>
+      <p className="mt-1 text-base font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-md bg-panel px-3 py-3">
+      <p className="text-sm font-semibold text-slate-500">{label}</p>
+      <p className="text-right text-sm font-semibold text-ink">{value}</p>
+    </div>
   );
 }

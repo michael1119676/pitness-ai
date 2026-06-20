@@ -9,6 +9,9 @@ export const localStoreKeys = {
   supplements: "adfc_supplements_v1",
   workoutLogs: "adfc_workout_logs_v1",
   dailyRevisions: "adfc_daily_revisions_v1",
+  workoutSession: "adfc_workout_session_v1",
+  mealDraft: "adfc_meal_draft_v1",
+  favoriteMeals: "adfc_favorite_meals_v1",
   cloudSyncMeta: "adfc_cloud_sync_meta_v1"
 } as const;
 
@@ -22,5 +25,8 @@ export const appLocalStorageKeys = [
   localStoreKeys.mealLogs,
   localStoreKeys.supplements,
   localStoreKeys.workoutLogs,
-  localStoreKeys.dailyRevisions
+  localStoreKeys.dailyRevisions,
+  localStoreKeys.workoutSession,
+  localStoreKeys.mealDraft,
+  localStoreKeys.favoriteMeals
 ] as const;

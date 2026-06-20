@@ -1,6 +1,6 @@
 "use client";
 
-import { Save, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import type {
   AvoidableBodyPart,
@@ -10,7 +10,7 @@ import type {
   MainBodyGoal,
   PreferredTrainingStyle
 } from "@/lib/daily-types";
-import { avoidBodyPartOptions, bodyPartLabels, toggleBodyPart } from "@/lib/daily-planning";
+import { avoidBodyPartOptions, formatBodyPart, toggleBodyPart } from "@/lib/daily-planning";
 import {
   defaultBodyGoalProfile,
   loadBodyGoalProfile,
@@ -18,14 +18,14 @@ import {
 } from "@/lib/local-store";
 
 const goalLabels: Record<MainBodyGoal, string> = {
-  lean_muscular: "린 머스큘러",
-  aesthetic_v_taper: "V taper",
-  classic_physique: "클래식 피지크",
-  bulk_muscle_gain: "벌크/근육 증가",
-  body_recomposition: "바디 리컴포지션",
+  lean_muscular: "선명하고 탄탄한 몸",
+  aesthetic_v_taper: "어깨와 등이 넓은 V라인",
+  classic_physique: "균형 잡힌 클래식 체형",
+  bulk_muscle_gain: "근육량 증가",
+  body_recomposition: "체지방 감량 + 근육 유지",
   fat_loss: "체지방 감량",
   athletic_performance: "운동 수행능력",
-  lower_body_focus: "하체 집중",
+  lower_body_focus: "하체 중심",
   balanced_health: "균형 건강",
   custom: "직접 설정"
 };
@@ -39,9 +39,9 @@ const styleLabels: Record<PreferredTrainingStyle, string> = {
 };
 
 const dietLabels: Record<DietAggressiveness, string> = {
-  conservative: "보수적",
+  conservative: "천천히",
   moderate: "보통",
-  aggressive: "공격적"
+  aggressive: "빠르게"
 };
 
 const cardioLabels: Record<CardioPreference, string> = {
@@ -50,16 +50,16 @@ const cardioLabels: Record<CardioPreference, string> = {
   high: "높음"
 };
 
-const vTaperPreset: AvoidableBodyPart[] = [
-  "side_delt",
-  "rear_delt",
-  "lats",
-  "upper_back",
-  "upper_chest"
+const presets: Array<{ goal: MainBodyGoal; priority: AvoidableBodyPart[]; avoid?: AvoidableBodyPart[] }> = [
+  { goal: "aesthetic_v_taper", priority: ["side_delt", "rear_delt", "lats", "upper_back", "upper_chest"] },
+  { goal: "body_recomposition", priority: ["upper_chest", "lats", "glutes"], avoid: [] },
+  { goal: "lower_body_focus", priority: ["quads", "hamstrings", "glutes", "calves"] },
+  { goal: "fat_loss", priority: ["upper_body", "lower_body"], avoid: [] }
 ];
 
 export function BodyGoalSettings() {
   const [profile, setProfile] = useState<BodyGoalProfile>(defaultBodyGoalProfile);
+  const [step, setStep] = useState(1);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -71,139 +71,127 @@ export function BodyGoalSettings() {
   }
 
   function applyPreset(goal: MainBodyGoal) {
-    if (goal === "aesthetic_v_taper") {
-      patch({ mainBodyGoal: goal, priorityMuscles: vTaperPreset });
-      return;
-    }
-    if (goal === "lower_body_focus") {
-      patch({
-        mainBodyGoal: goal,
-        priorityMuscles: ["quads", "hamstrings", "glutes", "calves"]
-      });
-      return;
-    }
-    patch({ mainBodyGoal: goal });
+    const preset = presets.find((item) => item.goal === goal);
+    patch({
+      mainBodyGoal: goal,
+      priorityMuscles: preset?.priority ?? profile.priorityMuscles,
+      avoidOverdevelopmentMuscles: preset?.avoid ?? profile.avoidOverdevelopmentMuscles
+    });
   }
 
   function save() {
     saveBodyGoalProfile(profile);
-    setMessage("목표 체형 설정을 저장했습니다.");
+    setMessage("목표 체형을 저장했습니다. 오늘 루틴부터 반영됩니다.");
   }
 
   return (
-    <div className="space-y-5">
-      <div>
+    <div className="space-y-4">
+      <section className="rounded-md bg-ink p-5 text-white shadow-soft">
         <p className="text-xs font-semibold uppercase tracking-wide text-mint">목표 체형</p>
-        <h1 className="mt-1 text-2xl font-semibold md:text-3xl">Body Goal Profile</h1>
-        <p className="mt-2 text-sm leading-6 text-slate-600">
-          이 설정은 오늘 운동 부위, 주간 목표 볼륨, 운동 선택 점수, 식단 목표와 코치 설명에
-          반영됩니다.
-        </p>
-      </div>
+        <h1 className="mt-2 text-2xl font-semibold">3단계로 목표 정하기</h1>
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {[1, 2, 3].map((item) => (
+            <div key={item} className={`h-2 rounded-full ${step >= item ? "bg-mint" : "bg-white/15"}`} />
+          ))}
+        </div>
+      </section>
 
       <section className="rounded-md border border-line bg-white p-4 shadow-soft">
-        <div className="grid gap-3 md:grid-cols-2">
-          <SelectField
-            label="주 목표"
-            value={profile.mainBodyGoal}
-            options={Object.keys(goalLabels) as MainBodyGoal[]}
-            labels={goalLabels}
-            onChange={applyPreset}
-          />
-          <SelectField
-            label="선호 훈련 스타일"
-            value={profile.preferredTrainingStyle}
-            options={Object.keys(styleLabels) as PreferredTrainingStyle[]}
-            labels={styleLabels}
-            onChange={(preferredTrainingStyle) => patch({ preferredTrainingStyle })}
-          />
-          <SelectField
-            label="식단 조정 강도"
-            value={profile.dietAggressiveness}
-            options={Object.keys(dietLabels) as DietAggressiveness[]}
-            labels={dietLabels}
-            onChange={(dietAggressiveness) => patch({ dietAggressiveness })}
-          />
-          <SelectField
-            label="유산소 선호"
-            value={profile.cardioPreference}
-            options={Object.keys(cardioLabels) as CardioPreference[]}
-            labels={cardioLabels}
-            onChange={(cardioPreference) => patch({ cardioPreference })}
-          />
-        </div>
+        {step === 1 ? (
+          <div>
+            <h2 className="text-lg font-semibold">어떤 몸을 만들고 싶은가요?</h2>
+            <div className="mt-4 grid gap-2 md:grid-cols-2">
+              {presets.map((preset) => (
+                <button
+                  key={preset.goal}
+                  type="button"
+                  onClick={() => applyPreset(preset.goal)}
+                  className={`min-h-16 rounded-md border px-3 text-left text-sm font-semibold ${
+                    profile.mainBodyGoal === preset.goal ? "border-ink bg-panel text-ink" : "border-line bg-white text-slate-700"
+                  }`}
+                >
+                  {goalLabels[preset.goal]}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
-        <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <NumberField
-            label="목표 체중(kg)"
-            value={profile.targetBodyWeightKg}
-            onChange={(targetBodyWeightKg) => patch({ targetBodyWeightKg })}
-          />
-          <NumberField
-            label="목표 체지방률(%)"
-            value={profile.targetBodyFatPercentage}
-            onChange={(targetBodyFatPercentage) => patch({ targetBodyFatPercentage })}
-          />
-          <NumberField
-            label="목표 골격근량(kg)"
-            value={profile.targetSkeletalMuscleMassKg}
-            onChange={(targetSkeletalMuscleMassKg) => patch({ targetSkeletalMuscleMassKg })}
-          />
-          <NumberField
-            label="주간 체중 변화(kg)"
-            value={profile.weeklyWeightChangeTargetKg}
-            allowNegative
-            onChange={(weeklyWeightChangeTargetKg) =>
-              patch({ weeklyWeightChangeTargetKg: weeklyWeightChangeTargetKg ?? 0 })
-            }
-          />
-        </div>
+        {step === 2 ? (
+          <div className="space-y-4">
+            <MusclePicker
+              title="우선 키우고 싶은 부위"
+              value={profile.priorityMuscles}
+              onChange={(priorityMuscles) => patch({ priorityMuscles })}
+            />
+            <MusclePicker
+              title="과하게 키우고 싶지 않은 부위"
+              value={profile.avoidOverdevelopmentMuscles}
+              onChange={(avoidOverdevelopmentMuscles) => patch({ avoidOverdevelopmentMuscles })}
+              tone="avoid"
+            />
+          </div>
+        ) : null}
 
-        <MusclePicker
-          title="우선 성장 부위"
-          value={profile.priorityMuscles}
-          onChange={(priorityMuscles) => patch({ priorityMuscles })}
-        />
-        <MusclePicker
-          title="과발달 방지 부위"
-          value={profile.avoidOverdevelopmentMuscles}
-          onChange={(avoidOverdevelopmentMuscles) => patch({ avoidOverdevelopmentMuscles })}
-        />
+        {step === 3 ? (
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">목표 수치와 성향</h2>
+            <div className="grid gap-3 md:grid-cols-3">
+              <NumberField label="목표 체중" value={profile.targetBodyWeightKg} suffix="kg" onChange={(targetBodyWeightKg) => patch({ targetBodyWeightKg })} />
+              <NumberField label="목표 체지방률" value={profile.targetBodyFatPercentage} suffix="%" onChange={(targetBodyFatPercentage) => patch({ targetBodyFatPercentage })} />
+              <NumberField label="목표 골격근량" value={profile.targetSkeletalMuscleMassKg} suffix="kg" onChange={(targetSkeletalMuscleMassKg) => patch({ targetSkeletalMuscleMassKg })} />
+            </div>
+            <details className="rounded-md bg-panel p-3">
+              <summary className="cursor-pointer text-sm font-semibold">고급 설정</summary>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <SelectField label="훈련 성향" value={profile.preferredTrainingStyle} labels={styleLabels} onChange={(preferredTrainingStyle) => patch({ preferredTrainingStyle })} />
+                <SelectField label="식단 속도" value={profile.dietAggressiveness} labels={dietLabels} onChange={(dietAggressiveness) => patch({ dietAggressiveness })} />
+                <SelectField label="유산소" value={profile.cardioPreference} labels={cardioLabels} onChange={(cardioPreference) => patch({ cardioPreference })} />
+              </div>
+              <textarea
+                value={profile.notes}
+                onChange={(event) => patch({ notes: event.target.value })}
+                rows={3}
+                placeholder="메모"
+                className="mt-3 w-full rounded-md border border-line bg-white px-3 py-2 text-sm"
+              />
+            </details>
+          </div>
+        ) : null}
 
-        <label className="mt-4 block text-sm font-medium text-slate-700">
-          메모
-          <textarea
-            value={profile.notes}
-            onChange={(event) => patch({ notes: event.target.value })}
-            rows={4}
-            className="mt-1 w-full rounded-md border border-line bg-panel px-3 py-2 text-sm text-ink"
-          />
-        </label>
-
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          {message ? <p className="text-sm font-medium text-emerald-700">{message}</p> : <span />}
+        <div className="mt-5 flex items-center justify-between gap-2">
           <button
             type="button"
-            onClick={save}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-ink px-4 text-sm font-semibold text-white"
+            onClick={() => setStep((current) => Math.max(1, current - 1))}
+            disabled={step === 1}
+            className="inline-flex min-h-11 items-center gap-2 rounded-md border border-line bg-panel px-4 text-sm font-semibold text-slate-700 disabled:opacity-40"
           >
-            <Save size={17} aria-hidden />
-            저장
+            <ArrowLeft size={17} aria-hidden />
+            이전
           </button>
+          {step < 3 ? (
+            <button
+              type="button"
+              onClick={() => setStep((current) => Math.min(3, current + 1))}
+              className="inline-flex min-h-11 items-center gap-2 rounded-md bg-ink px-4 text-sm font-semibold text-white"
+            >
+              다음
+              <ArrowRight size={17} aria-hidden />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={save}
+              className="inline-flex min-h-11 items-center gap-2 rounded-md bg-ink px-4 text-sm font-semibold text-white"
+            >
+              <Save size={17} aria-hidden />
+              저장
+            </button>
+          )}
         </div>
       </section>
 
-      <section className="rounded-md border border-line bg-white p-4 shadow-soft">
-        <div className="flex items-center gap-2">
-          <Sparkles size={18} className="text-mint" aria-hidden />
-          <h2 className="text-lg font-semibold">현재 반영 방식</h2>
-        </div>
-        <div className="mt-3 grid gap-2 md:grid-cols-3">
-          <Info text="우선 부위는 회복 점수와 주간 볼륨 부족분이 충분할 때만 오늘 후보가 됩니다." />
-          <Info text="과발달 방지 부위는 target effective sets와 fallback 점수에서 낮게 평가됩니다." />
-          <Info text="인바디는 큰 방향과 좌우 밸런스만 참고하고 세부 부위는 운동 기록을 우선합니다." />
-        </div>
-      </section>
+      {message ? <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">{message}</p> : null}
     </div>
   );
 }
@@ -211,16 +199,18 @@ export function BodyGoalSettings() {
 function MusclePicker({
   title,
   value,
-  onChange
+  onChange,
+  tone = "priority"
 }: {
   title: string;
   value: AvoidableBodyPart[];
   onChange: (value: AvoidableBodyPart[]) => void;
+  tone?: "priority" | "avoid";
 }) {
   return (
-    <fieldset className="mt-4">
-      <legend className="text-sm font-semibold text-slate-700">{title}</legend>
-      <div className="mt-2 flex flex-wrap gap-1">
+    <fieldset>
+      <legend className="text-lg font-semibold">{title}</legend>
+      <div className="mt-3 flex max-h-64 flex-wrap gap-2 overflow-y-auto">
         {avoidBodyPartOptions.map((part) => {
           const selected = value.includes(part);
           return (
@@ -228,13 +218,15 @@ function MusclePicker({
               key={part}
               type="button"
               onClick={() => onChange(toggleBodyPart(value, part))}
-              className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+              className={`min-h-10 rounded-md border px-3 text-sm font-semibold ${
                 selected
-                  ? "border-mint bg-emerald-50 text-emerald-700"
+                  ? tone === "priority"
+                    ? "border-mint bg-emerald-50 text-emerald-700"
+                    : "border-rose-200 bg-rose-50 text-rose-700"
                   : "border-line bg-panel text-slate-600"
               }`}
             >
-              {bodyPartLabels[part] ?? part}
+              {formatBodyPart(part)}
             </button>
           );
         })}
@@ -243,65 +235,53 @@ function MusclePicker({
   );
 }
 
+function NumberField({
+  label,
+  value,
+  suffix,
+  onChange
+}: {
+  label: string;
+  value: number | null;
+  suffix: string;
+  onChange: (value: number | null) => void;
+}) {
+  return (
+    <label className="text-sm font-medium text-slate-700">
+      {label}
+      <div className="relative mt-1">
+        <input
+          type="number"
+          inputMode="decimal"
+          value={value ?? ""}
+          onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
+          className="min-h-11 w-full rounded-md border border-line bg-panel px-3 pr-10 text-sm text-ink"
+        />
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">{suffix}</span>
+      </div>
+    </label>
+  );
+}
+
 function SelectField<T extends string>({
   label,
   value,
-  options,
   labels,
   onChange
 }: {
   label: string;
   value: T;
-  options: readonly T[];
   labels: Record<T, string>;
   onChange: (value: T) => void;
 }) {
   return (
     <label className="text-sm font-medium text-slate-700">
       {label}
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value as T)}
-        className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm text-ink"
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {labels[option]}
-          </option>
+      <select value={value} onChange={(event) => onChange(event.target.value as T)} className="mt-1 min-h-11 w-full rounded-md border border-line bg-white px-3 text-sm">
+        {(Object.keys(labels) as T[]).map((option) => (
+          <option key={option} value={option}>{labels[option]}</option>
         ))}
       </select>
     </label>
   );
-}
-
-function NumberField({
-  label,
-  value,
-  allowNegative,
-  onChange
-}: {
-  label: string;
-  value: number | null;
-  allowNegative?: boolean;
-  onChange: (value: number | null) => void;
-}) {
-  return (
-    <label className="text-sm font-medium text-slate-700">
-      {label}
-      <input
-        type="number"
-        min={allowNegative ? undefined : 0}
-        step="0.1"
-        value={value ?? ""}
-        onChange={(event) =>
-          onChange(event.target.value === "" ? null : Number(event.target.value))
-        }
-        className="mt-1 min-h-11 w-full rounded-md border border-line bg-panel px-3 text-sm text-ink"
-      />
-    </label>
-  );
-}
-
-function Info({ text }: { text: string }) {
-  return <p className="rounded-md bg-panel px-3 py-2 text-sm leading-6 text-slate-700">{text}</p>;
 }

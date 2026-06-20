@@ -43,10 +43,41 @@ export function BodyDashboard() {
 
       <section className="grid gap-3 md:grid-cols-4">
         <Metric label="기록 수" value={`${trend.recordCount}개`} />
-        <Metric label="신뢰도" value={trend.confidence} />
-        <Metric label="상태" value={trend.status === "ok" ? "추세 사용" : "데이터 부족"} />
+        <Metric
+          label="추세"
+          value={
+            trend.recordCount >= 2
+              ? trend.recordCount >= 3
+                ? "확인 가능"
+                : "한 번 더 기록"
+              : "기록 필요"
+          }
+        />
+        <Metric label="상태" value={trend.latest ? "최근 기록 있음" : "CSV 필요"} />
         <Metric label="최근 측정" value={latest?.measuredAt.slice(0, 10) ?? "-"} />
       </section>
+
+      {!latest ? (
+        <section className="rounded-md border border-line bg-white p-4 shadow-soft">
+          <h2 className="text-lg font-semibold">아직 인바디 기록이 없습니다</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            CSV를 가져오면 체중, 골격근량, 체지방률을 오늘 루틴과 식단 판단에 참고합니다.
+          </p>
+          <Link
+            href="/body/import"
+            className="mt-4 inline-flex min-h-11 items-center justify-center rounded-md bg-ink px-4 text-sm font-semibold text-white"
+          >
+            인바디 CSV 가져오기
+          </Link>
+        </section>
+      ) : trend.recordCount < 2 ? (
+        <section className="rounded-md border border-line bg-white p-4 shadow-soft">
+          <h2 className="text-lg font-semibold">최근 기록은 저장됐습니다</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            한 번 더 측정하면 최근 기록과 이전 기록의 변화를 자연어로 요약해드릴게요.
+          </p>
+        </section>
+      ) : null}
 
       <section className="rounded-md border border-line bg-white p-4 shadow-soft">
         <h2 className="text-lg font-semibold">최신 기록</h2>
@@ -61,7 +92,7 @@ export function BodyDashboard() {
       <section className="rounded-md border border-line bg-white p-4 shadow-soft">
         <h2 className="text-lg font-semibold">최근 변화와 4주 평균</h2>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <Info label="latest vs previous">
+          <Info label="최근 측정 대비 변화">
             체중 {formatNumber(trend.weightChangeKg, " kg")} / 골격근량{" "}
             {formatNumber(trend.skeletalMuscleMassChangeKg, " kg")} / 체지방량{" "}
             {formatNumber(trend.bodyFatMassChangeKg, " kg")} / 체지방률{" "}
