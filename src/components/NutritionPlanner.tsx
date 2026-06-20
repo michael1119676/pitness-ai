@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { DailyNutritionPlan, MealLog } from "@/lib/daily-types";
 import {
   buildDailyPlanSnapshot,
+  buildDailyPlanSnapshotFromRevision,
   loadDailyPlanningState,
   type DailyPlanningState
 } from "@/lib/daily-plan-client";
@@ -101,7 +102,9 @@ export function NutritionPlanner() {
 
   function refresh(nextState: DailyPlanningState) {
     const latestRevision = loadLatestDailyPlanRevision(nextState.date);
-    const snapshot = buildDailyPlanSnapshot(nextState, latestRevision?.trainingDecisionSnapshot ?? null);
+    const snapshot = buildDailyPlanSnapshotFromRevision(nextState, latestRevision, {
+      preserveNutrition: false
+    });
     setState(nextState);
     setPlan(snapshot.nutritionPlan);
     return snapshot;

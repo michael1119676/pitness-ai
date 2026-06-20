@@ -2,6 +2,7 @@
 
 import type {
   DailyCheckIn,
+  DailyPlanRevision,
   DailyTrainingDecision,
   UserSupplementProfile
 } from "@/lib/daily-types";
@@ -106,4 +107,25 @@ export function buildDailyPlanSnapshot(
   });
 
   return { context, decision, input, plan, nutritionPlan };
+}
+
+export function buildDailyPlanSnapshotFromRevision(
+  state: DailyPlanningState,
+  revision?: DailyPlanRevision | null,
+  options: { preserveNutrition?: boolean } = {}
+) {
+  const snapshot = buildDailyPlanSnapshot(
+    state,
+    revision?.trainingDecisionSnapshot ?? null
+  );
+  if (!revision) return snapshot;
+
+  return {
+    ...snapshot,
+    decision: revision.trainingDecisionSnapshot ?? snapshot.decision,
+    plan: revision.finalWorkoutPlanSnapshot ?? snapshot.plan,
+    nutritionPlan: options.preserveNutrition === false
+      ? snapshot.nutritionPlan
+      : revision.nutritionPlanSnapshot
+  };
 }

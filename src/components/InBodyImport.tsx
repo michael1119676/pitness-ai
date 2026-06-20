@@ -3,11 +3,15 @@
 import Link from "next/link";
 import { ArrowLeft, FileUp } from "lucide-react";
 import { useState } from "react";
-import { buildDailyPlanSnapshot, loadDailyPlanningState } from "@/lib/daily-plan-client";
+import {
+  buildDailyPlanSnapshotFromRevision,
+  loadDailyPlanningState
+} from "@/lib/daily-plan-client";
 import { parseInBodyCsv, upsertBodyCompositions } from "@/lib/inbody";
 import {
   appendDailyPlanRevision,
   loadBodyCompositions,
+  loadLatestDailyPlanRevision,
   saveBodyCompositions
 } from "@/lib/local-store";
 
@@ -43,9 +47,12 @@ export function InBodyImport() {
     saveBodyCompositions(result.records);
 
     const state = loadDailyPlanningState();
-    const snapshot = buildDailyPlanSnapshot({
+    const latestRevision = loadLatestDailyPlanRevision(state.date);
+    const snapshot = buildDailyPlanSnapshotFromRevision({
       ...state,
       bodyCompositions: result.records
+    }, latestRevision, {
+      preserveNutrition: false
     });
     appendDailyPlanRevision({
       id: makeId("revision"),

@@ -16,7 +16,8 @@ import {
   emptyWorkoutInput,
   type Equipment,
   type Muscle,
-  type UserSettings
+  type UserSettings,
+  type WorkoutPlanItem
 } from "@/lib/types";
 import { getScopedLocalStoreKey } from "@/lib/app-users";
 import { queueCloudSync } from "@/lib/cloud-sync";
@@ -118,6 +119,7 @@ export interface WorkoutUiSession {
   status: "idle" | "in_progress" | "completed";
   startedAt: string | null;
   completedAt: string | null;
+  planItemsSnapshot: WorkoutPlanItem[] | null;
   currentItemId: string | null;
   currentSetIndex: number;
   restEndsAt: string | null;
@@ -365,6 +367,7 @@ export function makeDefaultWorkoutSession(date = todayKey()): WorkoutUiSession {
     status: "idle",
     startedAt: null,
     completedAt: null,
+    planItemsSnapshot: null,
     currentItemId: null,
     currentSetIndex: 1,
     restEndsAt: null,

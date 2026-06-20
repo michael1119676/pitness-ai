@@ -6,6 +6,7 @@ import type { AvoidableBodyPart, WorkoutSetLog } from "@/lib/daily-types";
 import { formatBodyPart, toggleBodyPart } from "@/lib/daily-planning";
 import {
   buildDailyPlanSnapshot,
+  buildDailyPlanSnapshotFromRevision,
   loadDailyPlanningState,
   type DailyPlanningState
 } from "@/lib/daily-plan-client";
@@ -78,12 +79,15 @@ export function WorkoutPlanner() {
   useEffect(() => {
     const loaded = loadDailyPlanningState();
     const latestRevision = loadLatestDailyPlanRevision(loaded.date);
-    const built = buildDailyPlanSnapshot(loaded, latestRevision?.trainingDecisionSnapshot ?? null);
-    const planItems = latestRevision?.finalWorkoutPlanSnapshot?.items ?? built.plan.items;
+    const built = buildDailyPlanSnapshotFromRevision(loaded, latestRevision);
     const loadedSession = loadWorkoutSession(loaded.date);
+    const lockedItems =
+      loadedSession.status !== "idle" && loadedSession.planItemsSnapshot?.length
+        ? loadedSession.planItemsSnapshot
+        : built.plan.items;
     setState(loaded);
     setSnapshot(built);
-    setItems(planItems);
+    setItems(lockedItems);
     setSession(loadedSession);
   }, []);
 
@@ -120,6 +124,13 @@ export function WorkoutPlanner() {
     saveWorkoutSession(nextSession);
   }
 
+  function withPlanItemsSnapshot(nextSession: WorkoutUiSession, planItems: WorkoutPlanItem[]) {
+    return {
+      ...nextSession,
+      planItemsSnapshot: nextSession.status === "idle" ? null : planItems
+    };
+  }
+
   function commitRevision(planItems: WorkoutPlanItem[], triggerType: string, triggerPayload: unknown, nextState = state, nextSnapshot = snapshot) {
     if (!nextState || !nextSnapshot) return;
     const planSnapshot: WorkoutPlan = {
@@ -145,6 +156,7 @@ export function WorkoutPlanner() {
       status: "in_progress",
       startedAt: new Date().toISOString(),
       completedAt: null,
+      planItemsSnapshot: items,
       currentItemId: currentItem.id,
       currentSetIndex: 1,
       restEndsAt: null,
@@ -154,12 +166,12 @@ export function WorkoutPlanner() {
 
   function endWorkout(completed = false) {
     if (!state || !session) return;
-    persistSession({
+    persistSession(withPlanItemsSnapshot({
       ...session,
       status: completed ? "completed" : "idle",
       completedAt: completed ? new Date().toISOString() : null,
       restEndsAt: null
-    });
+    }, items));
     setMessage(completed ? "오늘 운동을 완료했습니다." : "운동을 종료했습니다. 기록은 저장되어 있습니다.");
   }
 
@@ -175,6 +187,9 @@ export function WorkoutPlanner() {
     const nextItems = items.slice();
     [nextItems[index], nextItems[nextIndex]] = [nextItems[nextIndex], nextItems[index]];
     setItems(nextItems);
+    if (session && session.status !== "idle") {
+      persistSession(withPlanItemsSnapshot(session, nextItems));
+    }
     commitRevision(nextItems, "workout_order_changed", { itemId, direction });
   }
 
@@ -217,9 +232,11 @@ export function WorkoutPlanner() {
     setItems(nextItems);
     const nextState = nextEquipment ? { ...state, equipment: nextEquipment } : state;
     setState(nextState);
+    let nextSession = session;
     if (session.currentItemId === replacement.item.id) {
-      persistSession({ ...session, currentItemId: nextItem.id, draft: defaultDraft(nextItem) });
+      nextSession = { ...session, currentItemId: nextItem.id, draft: defaultDraft(nextItem) };
     }
+    persistSession(withPlanItemsSnapshot(nextSession, nextItems));
     commitRevision(nextItems, replacement.intent === "unavailable" ? "equipment_unavailable" : "exercise_replaced", {
       from: replacement.item.exercise.id,
       to: nextItem.exercise.id
@@ -233,8 +250,11 @@ export function WorkoutPlanner() {
     const nextItem = adjustRecommendedWeight(item, direction);
     const nextItems = items.map((candidate) => (candidate.id === item.id ? nextItem : candidate));
     setItems(nextItems);
-    if (session?.currentItemId === item.id) {
-      persistSession({ ...session, draft: { ...session.draft, weight: String(nextItem.recommended_weight_lbs ?? "") } });
+    if (session && session.status !== "idle") {
+      const nextSession = session.currentItemId === item.id
+        ? { ...session, draft: { ...session.draft, weight: String(nextItem.recommended_weight_lbs ?? "") } }
+        : session;
+      persistSession(withPlanItemsSnapshot(nextSession, nextItems));
     }
     commitRevision(nextItems, direction === "down" ? "too_heavy" : "too_easy", { exerciseId: item.exercise.id });
   }
@@ -244,11 +264,11 @@ export function WorkoutPlanner() {
     const nextItems = items.filter((candidate) => candidate.id !== item.id);
     setItems(nextItems);
     const nextCurrent = session.currentItemId === item.id ? nextItems[currentIndex] ?? nextItems[currentIndex - 1] ?? null : null;
-    persistSession({
+    persistSession(withPlanItemsSnapshot({
       ...session,
       currentItemId: nextCurrent ? nextCurrent.id : session.currentItemId,
       draft: nextCurrent ? defaultDraft(nextCurrent) : session.draft
-    });
+    }, nextItems));
     commitRevision(nextItems, reason, { exerciseId: item.exercise.id });
   }
 

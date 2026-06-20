@@ -14,6 +14,7 @@ import {
 } from "@/lib/daily-planning";
 import {
   buildDailyPlanSnapshot,
+  buildDailyPlanSnapshotFromRevision,
   loadDailyPlanningState,
   type DailyPlanningState
 } from "@/lib/daily-plan-client";
@@ -96,8 +97,11 @@ export function TodayDashboard() {
 
   useEffect(() => {
     const loaded = loadDailyPlanningState();
-    const built = buildDailyPlanSnapshot(loaded);
     const loadedRevisions = loadDailyPlanRevisions(loaded.date);
+    const latestRevision = loadedRevisions
+      .slice()
+      .sort((a, b) => b.revisionNumber - a.revisionNumber)[0] ?? null;
+    const built = buildDailyPlanSnapshotFromRevision(loaded, latestRevision);
     const session = loadWorkoutSession(loaded.date);
     setState(loaded);
     setSnapshot(built);
