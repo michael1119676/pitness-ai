@@ -275,6 +275,11 @@ function diff(latest: number | null, previous: number | null) {
   return Math.round((latest - previous) * 100) / 100;
 }
 
+function ratio(record: BodyComposition | null) {
+  if (!record?.weightKg || !record.skeletalMuscleMassKg) return null;
+  return Math.round((record.skeletalMuscleMassKg / record.weightKg) * 10000) / 10000;
+}
+
 export function getInBodyTrendSummary(records: BodyComposition[]): InBodyTrendSummary {
   const sorted = [...records].sort((a, b) => a.measuredAt.localeCompare(b.measuredAt));
   const latest = sorted.at(-1) ?? null;
@@ -283,6 +288,8 @@ export function getInBodyTrendSummary(records: BodyComposition[]): InBodyTrendSu
   const recordCount = sorted.length;
   const status = recordCount >= 3 ? "ok" : "insufficient_data";
   const confidence = recordCount >= 8 ? "high" : recordCount >= 3 ? "medium" : "low";
+  const latestRatio = ratio(latest);
+  const previousRatio = ratio(previous);
 
   const armMuscleImbalanceKg =
     latest?.rightArmMuscleKg !== null &&
@@ -317,6 +324,8 @@ export function getInBodyTrendSummary(records: BodyComposition[]): InBodyTrendSu
       latest?.skeletalMuscleMassKg ?? null,
       previous?.skeletalMuscleMassKg ?? null
     ),
+    skeletalMuscleToWeightRatio: latestRatio,
+    skeletalMuscleToWeightRatioChange: diff(latestRatio, previousRatio),
     bodyFatMassChangeKg: diff(latest?.bodyFatMassKg ?? null, previous?.bodyFatMassKg ?? null),
     bodyFatPercentageChange: diff(
       latest?.bodyFatPercentage ?? null,

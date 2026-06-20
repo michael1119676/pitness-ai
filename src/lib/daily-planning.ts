@@ -16,6 +16,10 @@ import { summarizeTrainingHistory } from "@/lib/history-analysis";
 import { getInBodyTrendSummary } from "@/lib/inbody";
 import { getNutritionStatus } from "@/lib/nutrition";
 import {
+  calculateSessionVolumePrescription,
+  defaultPersonalTrainingStyleProfile
+} from "@/lib/training-style";
+import {
   equipmentPreferenceLabels,
   movementFamilies,
   muscles,
@@ -513,9 +517,14 @@ export function buildDailyTrainingContext({
   const unavailableEquipmentIds = equipment
     .filter((item) => !item.is_available || item.user_preference === "avoid")
     .map((item) => item.id);
+  const severeSoreness = checkIn.sorenessMuscles.filter((part) => {
+    const key = String(part);
+    return (checkIn.sorenessLevel[key] ?? 5) >= 8;
+  });
   const hardAvoid = expandAvoidedBodyParts([
     ...checkIn.avoidMusclesToday,
-    ...checkIn.painMuscles
+    ...checkIn.painMuscles,
+    ...severeSoreness
   ]);
   const history = summarizeTrainingHistory({
     logs: workoutLogs,
@@ -633,7 +642,7 @@ function overallIntensityForContext(context: DailyTrainingContext): Intensity {
 
 function estimateDuration(slots: DailyTrainingDecision["movementSlots"]) {
   return slots.reduce((minutes, slot) => {
-    const minutesPerSet = slot.intensity === "high" ? 5.5 : slot.intensity === "low" ? 4 : 4.75;
+    const minutesPerSet = slot.intensity === "high" ? 3 : slot.intensity === "low" ? 2.25 : 2.55;
     return minutes + Math.ceil(slot.targetSets * minutesPerSet);
   }, 6);
 }
@@ -643,7 +652,8 @@ export function enforceTimeLimit(
   availableTimeMinutes: number
 ): DailyTrainingDecision {
   let slots = [...decision.movementSlots].sort((a, b) => a.priority - b.priority);
-  while (slots.length > 1 && estimateDuration(slots) > availableTimeMinutes) {
+  const minimumSlots = decision.volumePrescription?.minExerciseCount ?? 1;
+  while (slots.length > minimumSlots && estimateDuration(slots) > availableTimeMinutes) {
     slots = slots.slice(0, -1);
   }
 
@@ -763,6 +773,7 @@ export function validateDailyTrainingDecision(
 function buildSlotForPart({
   part,
   index,
+  templateOffset = 0,
   intensity,
   targetSets,
   reason,
@@ -770,23 +781,26 @@ function buildSlotForPart({
 }: {
   part: string;
   index: number;
+  templateOffset?: number;
   intensity: Intensity;
   targetSets: number;
   reason: string;
   context: DailyTrainingContext;
 }): DailyTrainingDecision["movementSlots"][number] | null {
   const templates = slotTemplatesByPart[part] ?? slotTemplatesByPart[primaryByTargetRegion[part] ?? ""];
-  const template = templates?.find((item) =>
-    hasCapabilityForSlot(context, {
-      movementFamily: item.movementFamily,
-      primaryMuscle: item.primaryMuscle,
-      targetRegion: item.targetRegion
-    })
-  );
+  const availableTemplates =
+    templates?.filter((item) =>
+      hasCapabilityForSlot(context, {
+        movementFamily: item.movementFamily,
+        primaryMuscle: item.primaryMuscle,
+        targetRegion: item.targetRegion
+      })
+    ) ?? [];
+  const template = availableTemplates[templateOffset % Math.max(1, availableTemplates.length)];
   if (!template) return null;
 
   return {
-    slotId: `daily-${index + 1}-${part}-${template.movementFamily}`,
+    slotId: `daily-${index + 1}-${part}-${template.movementFamily}-${templateOffset + 1}`,
     primaryMuscle: template.primaryMuscle,
     targetRegion: template.targetRegion,
     movementFamily: template.movementFamily,
@@ -797,6 +811,83 @@ function buildSlotForPart({
     priority: index + 1,
     reason
   };
+}
+
+function recoveryStatusForContext(context: DailyTrainingContext) {
+  if (
+    context.hardConstraints.painMuscles.length > 0
+    || context.sleepSummary.conditionScore <= 4
+    || context.sleepSummary.quality <= 2
+    || context.sleepSummary.durationMinutes < 330
+  ) {
+    return "limited" as const;
+  }
+  if (context.sleepSummary.conditionScore >= 8 && context.sleepSummary.quality >= 4) {
+    return "fresh" as const;
+  }
+  return "normal" as const;
+}
+
+function allocateMovementSlots({
+  selected,
+  context,
+  intensity,
+  targetExerciseCount,
+  targetWorkingSetCount
+}: {
+  selected: DailyTrainingDecision["selectedMuscles"];
+  context: DailyTrainingContext;
+  intensity: Intensity;
+  targetExerciseCount: number;
+  targetWorkingSetCount: number;
+}) {
+  const seedParts = selected.map((item) => item.muscle);
+  const accessoryParts = ["rear_delt", "side_delt", "biceps", "triceps", "upper_back", "abs"];
+  const slotParts = unique([...seedParts, ...accessoryParts])
+    .filter((part) => !context.hardConstraints.forbiddenMuscles.includes(part))
+    .filter((part) => hasCapabilityForPart(context, part));
+  const slots: DailyTrainingDecision["movementSlots"] = [];
+  const targetSetsBySlot = Math.max(2, Math.floor(targetWorkingSetCount / Math.max(1, targetExerciseCount)));
+  let pass = 0;
+
+  while (slots.length < targetExerciseCount && pass < 4) {
+    for (const part of slotParts) {
+      if (slots.length >= targetExerciseCount) break;
+      const selectedReason =
+        selected.find((item) => item.muscle === part)?.reason
+        ?? `${formatBodyPart(part)} 보조 볼륨으로 목표 운동량을 채웁니다.`;
+      const slot = buildSlotForPart({
+        part,
+        index: slots.length,
+        templateOffset: pass,
+        intensity,
+        targetSets: targetSetsBySlot,
+        reason: selectedReason,
+        context
+      });
+      if (!slot) continue;
+      const duplicate = slots.some(
+        (item) =>
+          item.primaryMuscle === slot.primaryMuscle
+          && item.targetRegion === slot.targetRegion
+          && item.movementFamily === slot.movementFamily
+      );
+      if (duplicate && pass < 2) continue;
+      slots.push(slot);
+    }
+    pass += 1;
+  }
+
+  const currentSets = slots.reduce((sum, slot) => sum + slot.targetSets, 0);
+  let remainingSets = Math.max(0, targetWorkingSetCount - currentSets);
+  let index = 0;
+  while (remainingSets > 0 && slots.length > 0) {
+    slots[index % slots.length].targetSets = clamp(slots[index % slots.length].targetSets + 1, 2, 5);
+    remainingSets -= 1;
+    index += 1;
+  }
+
+  return slots;
 }
 
 function fallbackRestDecision(context: DailyTrainingContext, reason: string): DailyTrainingDecision {
@@ -836,8 +927,8 @@ export function generateFallbackTrainingDecision(
   }
 
   const forbidden = new Set(context.hardConstraints.forbiddenMuscles);
-  const selectedCount = clamp(Math.floor(context.availableTimeMinutes / 13), 2, 5);
   const intensity = overallIntensityForContext(context);
+  const recoveryStatus = recoveryStatusForContext(context);
   const sessionMode = intensity === "low" ? "light_recovery" : "strength";
   const candidates = context.muscleHistory
     .filter((summary) => !forbidden.has(summary.muscle))
@@ -858,10 +949,11 @@ export function generateFallbackTrainingDecision(
     })
     .sort((a, b) => b.score - a.score);
 
+  const selectedCount = clamp(Math.floor(context.availableTimeMinutes / 18), 3, 5);
   const selected = candidates.slice(0, selectedCount).map(({ summary }, index) => ({
     muscle: summary.muscle,
     priority: index + 1,
-    targetEffectiveSets: clamp(Math.ceil(summary.weeklyVolumeDeficit / 2), 2, 4),
+    targetEffectiveSets: clamp(Math.ceil(summary.weeklyVolumeDeficit / 2), 3, 6),
     reason:
       summary.weeklyVolumeDeficit > 0
         ? `${formatBodyPart(summary.muscle)} 주간 유효 세트가 목표보다 ${summary.weeklyVolumeDeficit}세트 부족합니다.`
@@ -881,18 +973,22 @@ export function generateFallbackTrainingDecision(
       }))
   ]);
 
-  const slots = selected
-    .map((item, index) =>
-      buildSlotForPart({
-        part: item.muscle,
-        index,
-        intensity,
-        targetSets: item.targetEffectiveSets,
-        reason: item.reason,
-        context
-      })
-    )
-    .filter((slot): slot is DailyTrainingDecision["movementSlots"][number] => Boolean(slot));
+  const volumePrescription = calculateSessionVolumePrescription({
+    availableTimeMinutes: context.availableTimeMinutes,
+    readinessScore: context.sleepSummary.conditionScore,
+    recoveryStatus,
+    trainingStyleProfile: defaultPersonalTrainingStyleProfile,
+    selectedMuscles: selected.map((item) => item.muscle),
+    avoidMuscles: context.hardConstraints.forbiddenMuscles,
+    painMuscles: context.hardConstraints.painMuscles
+  });
+  const slots = allocateMovementSlots({
+    selected,
+    context,
+    intensity,
+    targetExerciseCount: volumePrescription.targetExerciseCount,
+    targetWorkingSetCount: volumePrescription.targetWorkingSetCount
+  });
 
   const title =
     selected.length > 0
@@ -906,8 +1002,9 @@ export function generateFallbackTrainingDecision(
     excludedMuscles,
     movementSlots: slots,
     overallIntensity: intensity,
-    volumeMultiplier: intensity === "high" ? 1.1 : intensity === "low" ? 0.75 : 1,
-    estimatedDurationMinutes: estimateDuration(slots),
+    volumeMultiplier: volumePrescription.volumeMultiplier,
+    volumePrescription,
+    estimatedDurationMinutes: volumePrescription.targetDurationMinutes,
     evidenceKeys: [
       "muscleHistory.weeklyVolumeDeficit",
       "muscleHistory.recoveryScore",
@@ -918,6 +1015,7 @@ export function generateFallbackTrainingDecision(
     reasoningSummary: [
       `목표: ${context.bodyGoalProfile.mainBodyGoal}`,
       `기구 모드: ${equipmentPreferenceLabels[context.hardConstraints.equipmentMode as EquipmentPreferenceMode]}`,
+      `운동량 기준: 운동 ${volumePrescription.targetExerciseCount}개, 본세트 ${volumePrescription.targetWorkingSetCount}세트, 워밍업 ${volumePrescription.plannedWarmupSetCount}세트`,
       `금지 부위 ${context.hardConstraints.forbiddenMuscles.length}개와 금지 움직임 ${context.hardConstraints.forbiddenMovementFamilies.length}개를 먼저 제외했습니다.`
     ],
     warnings: [],

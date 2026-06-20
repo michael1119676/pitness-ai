@@ -5,8 +5,9 @@ import { Upload } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import type { BodyComposition } from "@/lib/daily-types";
+import { calculateBodyGoalProgress, formatMetricGoal } from "@/lib/body-goals";
 import { getInBodyTrendSummary } from "@/lib/inbody";
-import { loadBodyCompositions } from "@/lib/local-store";
+import { loadBodyCompositions, loadBodyMetricGoals } from "@/lib/local-store";
 
 function formatNumber(value: number | null | undefined, suffix = "") {
   return value === null || value === undefined ? "-" : `${Math.round(value * 10) / 10}${suffix}`;
@@ -21,6 +22,14 @@ export function BodyDashboard() {
 
   const trend = useMemo(() => getInBodyTrendSummary(records), [records]);
   const latest = trend.latest;
+  const primaryGoal = useMemo(
+    () => loadBodyMetricGoals().find((goal) => goal.enabled && goal.priority === "primary"),
+    []
+  );
+  const goalProgress = useMemo(
+    () => (primaryGoal ? calculateBodyGoalProgress(primaryGoal, records) : null),
+    [primaryGoal, records]
+  );
 
   return (
     <div className="space-y-5">
@@ -81,13 +90,51 @@ export function BodyDashboard() {
 
       <section className="rounded-md border border-line bg-white p-4 shadow-soft">
         <h2 className="text-lg font-semibold">최신 기록</h2>
-        <div className="mt-3 grid gap-3 md:grid-cols-4">
+        <div className="mt-3 grid gap-3 md:grid-cols-5">
           <Metric label="체중" value={formatNumber(latest?.weightKg, " kg")} />
           <Metric label="골격근량" value={formatNumber(latest?.skeletalMuscleMassKg, " kg")} />
+          <Metric
+            label="골격근량 비율"
+            value={formatNumber(trend.skeletalMuscleToWeightRatio === null ? null : trend.skeletalMuscleToWeightRatio * 100, "%")}
+          />
           <Metric label="체지방량" value={formatNumber(latest?.bodyFatMassKg, " kg")} />
           <Metric label="체지방률" value={formatNumber(latest?.bodyFatPercentage, "%")} />
         </div>
       </section>
+
+      {primaryGoal && goalProgress ? (
+        <section className="rounded-md border border-line bg-white p-4 shadow-soft">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold text-slate-500">개인 체형 목표</p>
+              <h2 className="mt-1 text-lg font-semibold">{formatMetricGoal(primaryGoal)}</h2>
+            </div>
+            <Link href="/goals" className="rounded-md bg-panel px-3 py-2 text-sm font-semibold">
+              목표 수정
+            </Link>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <Info label="현재">
+              {primaryGoal.type === "skeletal_muscle_to_weight_ratio"
+                ? formatNumber(goalProgress.currentValue === null ? null : goalProgress.currentValue * 100, "%")
+                : formatNumber(goalProgress.currentValue)}
+            </Info>
+            <Info label="목표까지">
+              {goalProgress.remainingValue === null
+                ? "-"
+                : primaryGoal.type === "skeletal_muscle_to_weight_ratio"
+                  ? `${Math.round(goalProgress.remainingValue * 1000) / 10}%p`
+                  : formatNumber(goalProgress.remainingValue)}
+            </Info>
+            <Info label="신뢰도">{goalProgress.confidence === "high" ? "높음" : goalProgress.confidence === "medium" ? "보통" : "낮음"}</Info>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-3">
+            {goalProgress.scenarios.map((scenario) => (
+              <Info key={scenario.label} label={scenario.label}>{scenario.description}</Info>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="rounded-md border border-line bg-white p-4 shadow-soft">
         <h2 className="text-lg font-semibold">최근 변화와 4주 평균</h2>

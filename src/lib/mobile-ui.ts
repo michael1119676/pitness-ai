@@ -30,6 +30,10 @@ export function countPlanSets(items: WorkoutPlanItem[]) {
   return items.reduce((sum, item) => sum + item.sets, 0);
 }
 
+export function countPlanWarmupSets(items: WorkoutPlanItem[]) {
+  return items.reduce((sum, item) => sum + (item.warmupSets?.length ?? 0), 0);
+}
+
 export function getNextMealName(hour = new Date().getHours()) {
   if (hour < 10) return "아침";
   if (hour < 15) return "점심";

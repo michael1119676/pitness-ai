@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import type {
   AvoidableBodyPart,
   BodyGoalProfile,
+  BodyMetricGoal,
   CardioPreference,
   DietAggressiveness,
   MainBodyGoal,
@@ -13,7 +14,10 @@ import type {
 import { avoidBodyPartOptions, formatBodyPart, toggleBodyPart } from "@/lib/daily-planning";
 import {
   defaultBodyGoalProfile,
+  defaultBodyMetricGoals,
   loadBodyGoalProfile,
+  loadBodyMetricGoals,
+  saveBodyMetricGoals,
   saveBodyGoalProfile
 } from "@/lib/local-store";
 
@@ -59,11 +63,13 @@ const presets: Array<{ goal: MainBodyGoal; priority: AvoidableBodyPart[]; avoid?
 
 export function BodyGoalSettings() {
   const [profile, setProfile] = useState<BodyGoalProfile>(defaultBodyGoalProfile);
+  const [metricGoals, setMetricGoals] = useState<BodyMetricGoal[]>(defaultBodyMetricGoals);
   const [step, setStep] = useState(1);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
     setProfile(loadBodyGoalProfile());
+    setMetricGoals(loadBodyMetricGoals());
   }, []);
 
   function patch(patchValue: Partial<BodyGoalProfile>) {
@@ -81,7 +87,26 @@ export function BodyGoalSettings() {
 
   function save() {
     saveBodyGoalProfile(profile);
+    saveBodyMetricGoals(metricGoals);
     setMessage("목표 체형을 저장했습니다. 오늘 루틴부터 반영됩니다.");
+  }
+
+  const skeletalRatioGoal =
+    metricGoals.find((goal) => goal.type === "skeletal_muscle_to_weight_ratio")
+    ?? defaultBodyMetricGoals[0];
+
+  function updateSkeletalRatioGoal(percentValue: number | null) {
+    const nextGoal: BodyMetricGoal = {
+      ...skeletalRatioGoal,
+      targetValue: percentValue === null ? null : percentValue / 100,
+      enabled: true,
+      priority: "primary",
+      direction: "at_least"
+    };
+    setMetricGoals((current) => [
+      nextGoal,
+      ...current.filter((goal) => goal.id !== nextGoal.id && goal.type !== "skeletal_muscle_to_weight_ratio")
+    ]);
   }
 
   return (
@@ -140,7 +165,16 @@ export function BodyGoalSettings() {
               <NumberField label="목표 체중" value={profile.targetBodyWeightKg} suffix="kg" onChange={(targetBodyWeightKg) => patch({ targetBodyWeightKg })} />
               <NumberField label="목표 체지방률" value={profile.targetBodyFatPercentage} suffix="%" onChange={(targetBodyFatPercentage) => patch({ targetBodyFatPercentage })} />
               <NumberField label="목표 골격근량" value={profile.targetSkeletalMuscleMassKg} suffix="kg" onChange={(targetSkeletalMuscleMassKg) => patch({ targetSkeletalMuscleMassKg })} />
+              <NumberField
+                label="체중 대비 골격근량 비율"
+                value={skeletalRatioGoal.targetValue === null ? null : Math.round(skeletalRatioGoal.targetValue * 1000) / 10}
+                suffix="%"
+                onChange={updateSkeletalRatioGoal}
+              />
             </div>
+            <p className="rounded-md bg-panel px-3 py-2 text-sm leading-6 text-slate-600">
+              예: 50을 입력하면 내부 목표는 0.5로 저장됩니다. 이 값은 개인 체형 목표이며 의학적 정상 기준으로 표시하지 않습니다.
+            </p>
             <details className="rounded-md bg-panel p-3">
               <summary className="cursor-pointer text-sm font-semibold">고급 설정</summary>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -149,7 +183,7 @@ export function BodyGoalSettings() {
                 <SelectField label="유산소" value={profile.cardioPreference} labels={cardioLabels} onChange={(cardioPreference) => patch({ cardioPreference })} />
               </div>
               <textarea
-                value={profile.notes}
+                value={profile.notes ?? ""}
                 onChange={(event) => patch({ notes: event.target.value })}
                 rows={3}
                 placeholder="메모"

@@ -1,7 +1,12 @@
 import { equipmentCatalog } from "@/lib/equipment-data";
 import { exerciseCatalog } from "@/lib/exercise-data";
 import { titleCase } from "@/lib/format";
-import type { DailyTrainingDecision } from "@/lib/daily-types";
+import type { DailyTrainingDecision, ExerciseModality, ExerciseRole, SessionVolumePrescription } from "@/lib/daily-types";
+import {
+  calculateSessionVolumePrescription,
+  defaultPersonalTrainingStyleProfile,
+  generateWarmupPrescription
+} from "@/lib/training-style";
 import {
   emptyWorkoutInput,
   muscles,
@@ -396,9 +401,26 @@ export function getEquipmentForExercise(
   exercise: Exercise,
   equipment: Equipment[] = equipmentCatalog
 ) {
+  if (exercise.equipment_requirement) {
+    const allOf = exercise.equipment_requirement.allOf
+      .map((id) => equipment.find((item) => item.id === id))
+      .filter((item): item is Equipment => Boolean(item));
+    const oneOf = exercise.equipment_requirement.oneOfGroups
+      .map((group) => group.map((id) => equipment.find((item) => item.id === id)).find(Boolean))
+      .filter((item): item is Equipment => Boolean(item));
+    return [...allOf, ...oneOf];
+  }
+
   return exercise.required_equipment_ids
     .map((id) => equipment.find((item) => item.id === id))
     .filter((item): item is Equipment => Boolean(item));
+}
+
+function exerciseEquipmentRequirementCount(exercise: Exercise) {
+  if (exercise.equipment_requirement) {
+    return exercise.equipment_requirement.allOf.length + exercise.equipment_requirement.oneOfGroups.length;
+  }
+  return exercise.required_equipment_ids.length;
 }
 
 function isEquipmentAllowedByMode(
@@ -428,7 +450,7 @@ export function filterAvailableExercises(
 ) {
   return exercises.filter((exercise) => {
     const requiredEquipment = getEquipmentForExercise(exercise, equipment);
-    if (requiredEquipment.length !== exercise.required_equipment_ids.length) return false;
+    if (requiredEquipment.length !== exerciseEquipmentRequirementCount(exercise)) return false;
     return requiredEquipment.every((item) => isEquipmentAvailableForWorkout(item, input));
   });
 }
@@ -486,7 +508,7 @@ export function scoreExerciseForSlot(
   const reasons: string[] = [];
   let score = 0;
 
-  if (requiredEquipment.length !== exercise.required_equipment_ids.length) {
+  if (requiredEquipment.length !== exerciseEquipmentRequirementCount(exercise)) {
     return { exercise, equipment: requiredEquipment, score: Number.NEGATIVE_INFINITY, reasons };
   }
 
@@ -588,8 +610,8 @@ function buildSelectionReason(item: ExerciseScore, slot: WorkoutSlot) {
 }
 
 function estimateMaxItems(availableMinutes: number, totalSlots: number, intensity: Intensity) {
-  const minutesPerItem = intensity === "high" ? 8 : intensity === "low" ? 6 : 7;
-  return clamp(Math.floor(availableMinutes / minutesPerItem), 3, totalSlots);
+  const minutesPerItem = intensity === "high" ? 10 : intensity === "low" ? 8 : 9;
+  return clamp(Math.floor(availableMinutes / minutesPerItem), 3, Math.max(totalSlots, 9));
 }
 
 function isMuscle(value: string): value is Muscle {
@@ -632,6 +654,225 @@ function slotFromDecisionSlot(
 
 function reasonFromDecision(item: ExerciseScore, slot: WorkoutSlot, decisionReason: string) {
   return `${buildSelectionReason(item, slot)} 오늘 결정 근거: ${decisionReason}`;
+}
+
+function exerciseModality(exercise: Exercise, equipment: Equipment[]): ExerciseModality {
+  const firstType = exercise.equipment_type_preference[0] ?? equipment[0]?.equipment_type ?? "machine";
+  if (["machine", "cable", "barbell", "dumbbell", "smith_machine", "bodyweight", "accessory"].includes(firstType)) {
+    return firstType as ExerciseModality;
+  }
+  return "machine";
+}
+
+function exerciseRole(exercise: Exercise): ExerciseRole {
+  if (exercise.exercise_role) return exercise.exercise_role;
+  if (["horizontal_push", "vertical_push", "horizontal_pull", "vertical_pull", "squat", "hinge"].includes(exercise.movement_family)) {
+    return "primary_compound";
+  }
+  return "primary_isolation";
+}
+
+function recommendedWeightKg(item: Pick<WorkoutPlanItem, "recommended_weight_lbs">) {
+  return item.recommended_weight_lbs === undefined
+    ? null
+    : Math.round(item.recommended_weight_lbs * 0.453592 * 2) / 2;
+}
+
+function withWarmups(items: WorkoutPlanItem[]) {
+  const warmedMuscles: string[] = [];
+  return items.map((item, index) => {
+    const warmupSets = generateWarmupPrescription({
+      exercise: item.exercise,
+      role: exerciseRole(item.exercise),
+      modality: exerciseModality(item.exercise, item.equipment),
+      recommendedWorkingWeightKg: recommendedWeightKg(item),
+      previousExercise: index > 0 ? items[index - 1].exercise : null,
+      musclesAlreadyWarmedUp: warmedMuscles
+    });
+    warmedMuscles.push(item.exercise.primary_muscle, item.exercise.target_region, ...item.exercise.secondary_muscles);
+    return {
+      ...item,
+      warmupSets
+    };
+  });
+}
+
+function totalWorkingSets(items: WorkoutPlanItem[]) {
+  return items.reduce((sum, item) => sum + item.sets, 0);
+}
+
+function totalWarmupSets(items: WorkoutPlanItem[]) {
+  return items.reduce((sum, item) => sum + (item.warmupSets?.length ?? 0), 0);
+}
+
+function isFreeWeightItem(item: WorkoutPlanItem) {
+  return item.equipment.some((equipment) => ["barbell", "dumbbell"].includes(equipment.equipment_type));
+}
+
+function candidateScoreForCompletion(item: ExerciseScore, focusMuscles: string[], existingItems: WorkoutPlanItem[]) {
+  const exercise = item.exercise;
+  const existingPatterns = existingItems.filter((existing) => existing.exercise.movement_pattern === exercise.movement_pattern).length;
+  const focusScore =
+    focusMuscles.includes(exercise.primary_muscle) || focusMuscles.includes(exercise.target_region)
+      ? 35
+      : exercise.secondary_muscles.some((muscle) => focusMuscles.includes(muscle))
+        ? 18
+        : ["rear_delt", "side_delt", "biceps", "triceps", "upper_back"].includes(exercise.primary_muscle)
+          ? 12
+          : 0;
+  const roleScore =
+    exerciseRole(exercise).includes("compound") ? 10 : existingItems.length >= 4 ? 14 : 4;
+  return item.score + focusScore + roleScore - existingPatterns * 22;
+}
+
+export function validateAndCompleteSessionPlan(input: {
+  draftPlan: WorkoutPlan;
+  volumePrescription: SessionVolumePrescription;
+  availableExercises: Exercise[];
+  equipment?: Equipment[];
+  hardConstraints: {
+    forbiddenMuscles: string[];
+    forbiddenMovementFamilies: MovementFamily[];
+  };
+}): WorkoutPlan {
+  const equipment = input.equipment ?? equipmentCatalog;
+  const selectedIds = new Set(input.draftPlan.items.map((item) => item.exercise.id));
+  const focusMuscles = input.draftPlan.focusMuscles ?? [];
+  const baseInput: GenerateWorkoutInput = {
+    ...emptyWorkoutInput,
+    workoutType: "full_body",
+    availableMinutes: input.volumePrescription.targetDurationMinutes,
+    intensity: input.draftPlan.intensity,
+    equipmentPreference:
+      defaultPersonalTrainingStyleProfile.equipmentMixMode === "machine_only"
+        ? "machine_only"
+        : "free_weight_allowed",
+    soreMuscles: [],
+    temporarilyUnavailableEquipmentIds: [],
+    avoidedEquipmentIds: [],
+    recentExerciseIds: []
+  };
+  let items = withWarmups(input.draftPlan.items);
+  const completionSlots: WorkoutSlot[] = [
+    ...workoutSlots.pull,
+    ...workoutSlots.push,
+    ...workoutSlots.legs,
+    ...workoutSlots.upper,
+    ...workoutSlots.full_body
+  ];
+
+  while (
+    items.length < input.volumePrescription.minExerciseCount
+    || totalWorkingSets(items) < input.volumePrescription.minWorkingSetCount
+  ) {
+    if (items.length >= input.volumePrescription.maxExerciseCount) break;
+    const slot = completionSlots.find((candidateSlot) =>
+      !items.some((item) => item.slot.id === candidateSlot.id)
+    );
+    if (!slot) break;
+    const candidate = input.availableExercises
+      .filter((exercise) => !selectedIds.has(exercise.id))
+      .filter((exercise) =>
+        !exerciseTouchesForbidden(
+          exercise,
+          input.hardConstraints.forbiddenMuscles,
+          input.hardConstraints.forbiddenMovementFamilies
+        )
+      )
+      .map((exercise) => scoreExerciseForSlot(exercise, slot, equipment, baseInput))
+      .filter((result) => Number.isFinite(result.score))
+      .sort((a, b) => candidateScoreForCompletion(b, focusMuscles, items) - candidateScoreForCompletion(a, focusMuscles, items))[0];
+    if (!candidate || candidate.score < 35) break;
+
+    selectedIds.add(candidate.exercise.id);
+    const sets = clamp(
+      Math.round(input.volumePrescription.targetWorkingSetCount / Math.max(1, input.volumePrescription.targetExerciseCount)),
+      2,
+      5
+    );
+    const nextItem: WorkoutPlanItem = {
+      id: `${slot.id}-${candidate.exercise.id}`,
+      slot,
+      exercise: candidate.exercise,
+      equipment: candidate.equipment,
+      score: candidate.score,
+      sets,
+      rep_min: candidate.exercise.default_rep_min,
+      rep_max: candidate.exercise.default_rep_max,
+      rest_seconds: restForIntensity(candidate.exercise.default_rest_seconds, input.draftPlan.intensity),
+      recommended_weight_lbs: weightForIntensity(candidate.exercise.default_weight_lbs, input.draftPlan.intensity),
+      reason: `${buildSelectionReason(candidate, slot)} 운동량 기준에 맞춰 보완했습니다.`
+    };
+    items = withWarmups([...items, nextItem]);
+  }
+
+  let setIndex = 0;
+  while (totalWorkingSets(items) < input.volumePrescription.minWorkingSetCount && items.length > 0) {
+    const item = items[setIndex % items.length];
+    item.sets = clamp(item.sets + 1, 2, 5);
+    setIndex += 1;
+  }
+
+  const hasFreeWeightCandidate = input.availableExercises.some((exercise) =>
+    exercise.equipment_type_preference.some((type) => ["barbell", "dumbbell"].includes(type))
+  );
+  if (
+    hasFreeWeightCandidate
+    && !items.some(isFreeWeightItem)
+    && input.volumePrescription.targetDurationMinutes >= 45
+  ) {
+    const replacementSlot = completionSlots.find((slot) =>
+      ["horizontal_push", "horizontal_pull", "vertical_push", "elbow_flexion", "elbow_extension"].includes(slot.movement_family)
+    );
+    const freeCandidate = replacementSlot
+      ? input.availableExercises
+          .filter((exercise) => !selectedIds.has(exercise.id))
+          .filter((exercise) => exercise.equipment_type_preference.some((type) => ["barbell", "dumbbell"].includes(type)))
+          .filter((exercise) =>
+            !exerciseTouchesForbidden(
+              exercise,
+              input.hardConstraints.forbiddenMuscles,
+              input.hardConstraints.forbiddenMovementFamilies
+            )
+          )
+          .map((exercise) => scoreExerciseForSlot(exercise, replacementSlot, equipment, baseInput))
+          .filter((result) => Number.isFinite(result.score))
+          .sort((a, b) => b.score - a.score)[0]
+      : null;
+    if (freeCandidate && freeCandidate.score >= 35 && items.length > 0) {
+      const replaceIndex = Math.max(0, items.length - 1);
+      items[replaceIndex] = {
+        ...items[replaceIndex],
+        id: `${replacementSlot!.id}-${freeCandidate.exercise.id}`,
+        slot: replacementSlot!,
+        exercise: freeCandidate.exercise,
+        equipment: freeCandidate.equipment,
+        score: freeCandidate.score,
+        rep_min: freeCandidate.exercise.default_rep_min,
+        rep_max: freeCandidate.exercise.default_rep_max,
+        rest_seconds: restForIntensity(freeCandidate.exercise.default_rest_seconds, input.draftPlan.intensity),
+        recommended_weight_lbs: weightForIntensity(freeCandidate.exercise.default_weight_lbs, input.draftPlan.intensity),
+        reason: `${buildSelectionReason(freeCandidate, replacementSlot!)} 자동 균형 기준으로 프리웨이트를 1개 포함했습니다.`
+      };
+      items = withWarmups(items);
+    }
+  }
+
+  const notes = [
+    ...input.draftPlan.notes,
+    `운동량 검증: 운동 ${items.length}개, 본세트 ${totalWorkingSets(items)}세트, 워밍업 ${totalWarmupSets(items)}세트.`
+  ];
+
+  return {
+    ...input.draftPlan,
+    items,
+    volumePrescription: {
+      ...input.volumePrescription,
+      plannedWarmupSetCount: totalWarmupSets(items),
+      targetTotalRecordedSetCount: totalWorkingSets(items) + totalWarmupSets(items)
+    },
+    notes
+  };
 }
 
 export function generateWorkoutPlan({
@@ -755,7 +996,9 @@ export function generateWorkoutPlanFromDecision({
   const planInput: GenerateWorkoutInput = {
     ...input,
     intensity: decision.overallIntensity,
-    availableMinutes: decision.estimatedDurationMinutes || input.availableMinutes
+    availableMinutes: decision.estimatedDurationMinutes || input.availableMinutes,
+    equipmentPreference:
+      input.equipmentPreference === "machine_only" ? "machine_only" : "free_weight_allowed"
   };
   const decisionSlots = decision.movementSlots
     .slice()
@@ -799,7 +1042,7 @@ export function generateWorkoutPlanFromDecision({
     (exercise) => !exerciseTouchesForbidden(exercise, forbiddenMuscles, forbiddenMovementFamilies)
   );
 
-  return {
+  const draftPlan: WorkoutPlan = {
     workoutType: "full_body",
     sessionTitle: decision.sessionTitle,
     focusMuscles: decision.selectedMuscles.map((item) => item.muscle),
@@ -815,6 +1058,29 @@ export function generateWorkoutPlanFromDecision({
       ...decision.warnings
     ]
   };
+
+  const volumePrescription =
+    decision.volumePrescription
+    ?? calculateSessionVolumePrescription({
+      availableTimeMinutes: input.availableMinutes,
+      readinessScore: decision.overallIntensity === "high" ? 9 : decision.overallIntensity === "low" ? 5 : 7,
+      recoveryStatus: decision.overallIntensity === "low" ? "limited" : "normal",
+      trainingStyleProfile: defaultPersonalTrainingStyleProfile,
+      selectedMuscles: decision.selectedMuscles.map((item) => item.muscle),
+      avoidMuscles: forbiddenMuscles,
+      painMuscles: []
+    });
+
+  return validateAndCompleteSessionPlan({
+    draftPlan,
+    volumePrescription,
+    availableExercises,
+    equipment,
+    hardConstraints: {
+      forbiddenMuscles,
+      forbiddenMovementFamilies
+    }
+  });
 }
 
 function replacementScore(

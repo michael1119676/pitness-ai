@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { ArrowRight, Bed, Brain, ChevronDown, Dumbbell, Moon, Plus, Utensils } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { AvoidableBodyPart, DailyTrainingDecision, ScheduleActivityType } from "@/lib/daily-types";
+import type { AvoidableBodyPart, BodyMetricGoal, DailyTrainingDecision, ScheduleActivityType } from "@/lib/daily-types";
+import { calculateBodyGoalProgress, formatMetricGoal } from "@/lib/body-goals";
 import {
   avoidBodyPartOptions,
   formatBodyPart,
@@ -18,11 +19,13 @@ import {
 } from "@/lib/daily-plan-client";
 import {
   appendDailyPlanRevision,
+  loadBodyMetricGoals,
   loadDailyPlanRevisions,
   loadWorkoutSession,
   saveDailyCheckIn
 } from "@/lib/local-store";
 import {
+  countPlanWarmupSets,
   countPlanSets,
   formatDateShort,
   formatMinutes,
@@ -79,6 +82,7 @@ function revisionExists(revisions: ReturnType<typeof loadDailyPlanRevisions>) {
 export function TodayDashboard() {
   const [state, setState] = useState<DailyPlanningState | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [metricGoals, setMetricGoals] = useState<BodyMetricGoal[]>([]);
   const [status, setStatus] = useState<TodayStatus>("needs_check_in");
   const [message, setMessage] = useState("");
   const [showDetails, setShowDetails] = useState(false);
@@ -97,6 +101,7 @@ export function TodayDashboard() {
     const session = loadWorkoutSession(loaded.date);
     setState(loaded);
     setSnapshot(built);
+    setMetricGoals(loadBodyMetricGoals());
     if (loaded.checkIn.trainingIntent === "rest") setStatus("rest_day");
     else if (session.status === "completed") setStatus("workout_completed");
     else if (session.status === "in_progress") setStatus("workout_in_progress");
@@ -220,6 +225,12 @@ export function TodayDashboard() {
   const latestBody = context.inBodyTrend.latest;
   const focus = summarizeFocusMuscles(decision);
   const reasons = decision.reasoningSummary.slice(0, 2);
+  const primaryMetricGoal = metricGoals.find((goal) => goal.enabled && goal.priority === "primary") ?? metricGoals.find((goal) => goal.enabled);
+  const goalProgress = primaryMetricGoal
+    ? calculateBodyGoalProgress(primaryMetricGoal, state.bodyCompositions)
+    : null;
+  const warmupSets = countPlanWarmupSets(plan.items);
+  const workingSets = countPlanSets(plan.items);
 
   return (
     <div className="space-y-4">
@@ -252,6 +263,48 @@ export function TodayDashboard() {
             <h1 className="mt-2 text-3xl font-semibold">{focus}</h1>
             <p className="mt-2 text-sm leading-6 text-slate-300">{formatMinutes(decision.estimatedDurationMinutes)} 안에 끝나는 루틴입니다.</p>
           </>
+        )}
+      </section>
+
+      <section className="rounded-md border border-line bg-white p-4 shadow-soft">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold text-slate-500">주 목표</p>
+            <h2 className="mt-1 text-lg font-semibold">
+              {primaryMetricGoal ? formatMetricGoal(primaryMetricGoal) : "어떤 몸을 만들고 싶나요?"}
+            </h2>
+          </div>
+          <Link href="/goals" className="shrink-0 rounded-md bg-panel px-3 py-2 text-sm font-semibold text-ink">
+            {primaryMetricGoal ? "자세히" : "설정"}
+          </Link>
+        </div>
+        {goalProgress && primaryMetricGoal ? (
+          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <Mini
+              label="현재"
+              value={
+                primaryMetricGoal.type === "skeletal_muscle_to_weight_ratio"
+                  ? formatNumber((goalProgress.currentValue ?? 0) * 100, "%")
+                  : formatNumber(goalProgress.currentValue)
+              }
+            />
+            <Mini
+              label="목표까지"
+              value={
+                goalProgress.remainingValue === null
+                  ? "-"
+                  : primaryMetricGoal.type === "skeletal_muscle_to_weight_ratio"
+                    ? `${Math.round(goalProgress.remainingValue * 1000) / 10}%p`
+                    : formatNumber(goalProgress.remainingValue)
+              }
+            />
+            <Mini label="최근 측정" value={formatDateShort(goalProgress.latestMeasuredAt)} />
+            <Mini label="신뢰도" value={goalProgress.confidence === "high" ? "높음" : goalProgress.confidence === "medium" ? "보통" : "낮음"} />
+          </div>
+        ) : (
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            목표를 설정하면 오늘 운동 부위와 식단을 현재 몸 상태에 맞춰 자동으로 조정합니다.
+          </p>
         )}
       </section>
 
@@ -358,10 +411,12 @@ export function TodayDashboard() {
 
       {status === "plan_ready" ? (
         <section className="rounded-md border border-line bg-white p-4 shadow-soft">
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
             <Mini label="예상 시간" value={formatMinutes(decision.estimatedDurationMinutes)} />
             <Mini label="운동" value={`${plan.items.length}개`} />
-            <Mini label="총 세트" value={`${countPlanSets(plan.items)}세트`} />
+            <Mini label="본세트" value={`${workingSets}세트`} />
+            <Mini label="워밍업" value={`${warmupSets}세트`} />
+            <Mini label="총 기록" value={`${workingSets + warmupSets}세트`} />
           </div>
           <div className="mt-4">
             <p className="text-xs font-semibold text-slate-500">오늘 운동할 부위</p>

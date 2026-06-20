@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import type {
   BodyComposition,
   BodyGoalProfile,
+  BodyMetricGoal,
   DailyCheckIn,
   MealLog,
   NutritionProfile,
   WorkoutSetLog
 } from "@/lib/daily-types";
+import { calculateBodyGoalProgress } from "@/lib/body-goals";
 import {
   buildDailyTrainingContext,
   generateFallbackTrainingDecision,
@@ -16,6 +18,7 @@ import { equipmentCatalog } from "@/lib/equipment-data";
 import { exerciseCatalog } from "@/lib/exercise-data";
 import { getInBodyTrendSummary, parseInBodyCsv } from "@/lib/inbody";
 import { calculateDailyNutritionPlan } from "@/lib/nutrition";
+import { calculateSessionVolumePrescription, defaultPersonalTrainingStyleProfile } from "@/lib/training-style";
 import type { EquipmentPreferenceMode, UserSettings } from "@/lib/types";
 import { generateWorkoutPlanFromDecision } from "@/lib/workout-engine";
 
@@ -26,6 +29,7 @@ const lowerMuscles = new Set(["quads", "hamstrings", "glutes", "calves", "adduct
 function goal(overrides: Partial<BodyGoalProfile> = {}): BodyGoalProfile {
   return {
     mainBodyGoal: "aesthetic_v_taper",
+    id: "test-goal",
     priorityMuscles: ["side_delt", "rear_delt", "lats", "upper_back", "upper_chest"],
     avoidOverdevelopmentMuscles: [],
     targetBodyWeightKg: null,
@@ -345,6 +349,135 @@ function scenario7() {
   assert.ok(Array.isArray(decision.movementSlots));
 }
 
+function scenario8() {
+  const metricGoal: BodyMetricGoal = {
+    id: "ratio",
+    type: "skeletal_muscle_to_weight_ratio",
+    direction: "at_least",
+    targetValue: 0.5,
+    targetMin: null,
+    targetMax: null,
+    priority: "primary",
+    enabled: true,
+    createdAt: now.toISOString(),
+    targetDate: null,
+    notes: null
+  };
+  const progress = calculateBodyGoalProgress(metricGoal, [
+    {
+      measuredAt: "2026-06-19T15:55:55+09:00",
+      device: "InBody",
+      weightKg: 82.7,
+      skeletalMuscleMassKg: 36.9,
+      muscleMassKg: null,
+      bodyFatMassKg: null,
+      bmi: null,
+      bodyFatPercentage: null,
+      basalMetabolicRateKcal: null,
+      inBodyScore: null,
+      rightArmMuscleKg: null,
+      leftArmMuscleKg: null,
+      trunkMuscleKg: null,
+      rightLegMuscleKg: null,
+      leftLegMuscleKg: null,
+      totalBodyWaterL: null,
+      intracellularWaterL: null,
+      extracellularWaterL: null,
+      extracellularWaterRatio: null,
+      waistCircumferenceCm: null,
+      visceralFatAreaCm2: null,
+      visceralFatLevel: null,
+      raw: {}
+    }
+  ]);
+
+  assert.equal(progress.status, "in_progress");
+  assert.ok(progress.currentValue !== null && Math.abs(progress.currentValue - 0.446) < 0.002);
+  assert.ok(progress.progressPercentage !== null && Math.abs(progress.progressPercentage - 89.2) < 0.5);
+  assert.ok(progress.scenarios.some((scenario) => scenario.description.includes("41.35kg")));
+  assert.ok(progress.scenarios.some((scenario) => scenario.description.includes("73.8kg")));
+}
+
+function scenario9() {
+  const prescription = calculateSessionVolumePrescription({
+    availableTimeMinutes: 70,
+    readinessScore: 8,
+    recoveryStatus: "normal",
+    trainingStyleProfile: defaultPersonalTrainingStyleProfile,
+    selectedMuscles: ["lats", "upper_back", "side_delt"],
+    avoidMuscles: [],
+    painMuscles: []
+  });
+
+  assert.ok(prescription.targetExerciseCount >= 6 && prescription.targetExerciseCount <= 8);
+  assert.ok(prescription.targetWorkingSetCount >= 20 && prescription.targetWorkingSetCount <= 27);
+  assert.ok(prescription.targetTotalRecordedSetCount >= 22 && prescription.targetTotalRecordedSetCount <= 31);
+
+  const context = buildContext({
+    dailyCheckIn: checkIn({ availableTimeMinutes: 70 }),
+    equipmentPreference: "free_weight_allowed"
+  });
+  const decision = generateFallbackTrainingDecision(context);
+  const plan = generateWorkoutPlanFromDecision({
+    decision,
+    input: {
+      workoutType: "full_body",
+      availableMinutes: 70,
+      intensity: decision.overallIntensity,
+      equipmentPreference: "free_weight_allowed",
+      soreMuscles: [],
+      temporarilyUnavailableEquipmentIds: context.hardConstraints.unavailableEquipmentIds,
+      avoidedEquipmentIds: context.hardConstraints.disabledEquipmentIds,
+      recentExerciseIds: []
+    },
+    forbiddenMuscles: context.hardConstraints.forbiddenMuscles,
+    forbiddenMovementFamilies: context.hardConstraints.forbiddenMovementFamilies
+  });
+
+  const workingSets = plan.items.reduce((sum, item) => sum + item.sets, 0);
+  const warmups = plan.items.reduce((sum, item) => sum + (item.warmupSets?.length ?? 0), 0);
+  assert.ok(plan.items.length >= 6 && plan.items.length <= 8);
+  assert.ok(workingSets >= 20 && workingSets <= 27);
+  assert.ok(workingSets + warmups >= 22);
+  assert.ok(plan.items.some((item) => item.equipment.some((equipment) => ["barbell", "dumbbell"].includes(equipment.equipment_type))));
+}
+
+function scenario10() {
+  const noFreeWeightEquipment = equipmentCatalog.filter(
+    (item) => !["barbell", "dumbbell"].includes(item.equipment_type) && !["eq-flat-bench", "eq-adjustable-bench", "eq-power-rack", "eq-squat-rack", "eq-bench-press-rack"].includes(item.id)
+  );
+  const context = buildDailyTrainingContext({
+    checkIn: checkIn({ availableTimeMinutes: 70 }),
+    goal: goal(),
+    settings: settings("free_weight_allowed"),
+    equipment: noFreeWeightEquipment,
+    exercises: exerciseCatalog,
+    workoutLogs: [],
+    bodyCompositions: [],
+    mealLogs: [],
+    nutritionProfile: nutritionProfile(),
+    now
+  });
+  const decision = generateFallbackTrainingDecision(context);
+  const plan = generateWorkoutPlanFromDecision({
+    decision,
+    input: {
+      workoutType: "full_body",
+      availableMinutes: 70,
+      intensity: decision.overallIntensity,
+      equipmentPreference: "free_weight_allowed",
+      soreMuscles: [],
+      temporarilyUnavailableEquipmentIds: context.hardConstraints.unavailableEquipmentIds,
+      avoidedEquipmentIds: context.hardConstraints.disabledEquipmentIds,
+      recentExerciseIds: []
+    },
+    equipment: noFreeWeightEquipment,
+    forbiddenMuscles: context.hardConstraints.forbiddenMuscles,
+    forbiddenMovementFamilies: context.hardConstraints.forbiddenMovementFamilies
+  });
+  assert.equal(plan.items.some((item) => item.equipment.some((equipment) => ["barbell", "dumbbell"].includes(equipment.equipment_type))), false);
+}
+
 scenario1();
 scenario2();
 scenario3();
@@ -352,5 +485,8 @@ scenario4();
 scenario5();
 scenario6();
 scenario7();
+scenario8();
+scenario9();
+scenario10();
 
 console.log("core scenarios passed");

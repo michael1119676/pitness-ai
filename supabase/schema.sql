@@ -566,3 +566,94 @@ create policy "coach_notes own rows" on coach_notes
 
 create policy "app_state_snapshots own rows" on app_state_snapshots
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Additive v2 tables for body metric goals and adaptive volume planning.
+create table if not exists body_metric_goals (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  type text not null,
+  direction text not null check (direction in ('at_least', 'at_most', 'target_range')),
+  target_value numeric,
+  target_min numeric,
+  target_max numeric,
+  priority text not null default 'secondary' check (priority in ('primary', 'secondary')),
+  enabled boolean not null default true,
+  target_date date,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists body_goal_progress_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  goal_id uuid not null references body_metric_goals(id) on delete cascade,
+  measured_at timestamptz,
+  current_value numeric,
+  target_value numeric,
+  progress_percentage numeric,
+  remaining_value numeric,
+  status text not null,
+  confidence text not null,
+  scenarios jsonb not null default '[]',
+  warnings text[] not null default '{}',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists daily_muscle_decisions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  date date not null,
+  session_title text not null,
+  selected_muscles jsonb not null default '[]',
+  excluded_muscles jsonb not null default '[]',
+  body_goal_contribution jsonb not null default '[]',
+  overall_intensity text not null,
+  estimated_duration_minutes integer not null,
+  summary_reasons text[] not null default '{}',
+  confidence text not null default 'low',
+  created_at timestamptz not null default now(),
+  unique (user_id, date)
+);
+
+create table if not exists personal_training_style_profiles (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade unique,
+  equipment_mix_mode text not null default 'adaptive_balanced',
+  target_free_weight_exercise_share_min numeric not null default 0.25,
+  target_free_weight_exercise_share_max numeric not null default 0.4,
+  target_machine_cable_exercise_share_min numeric not null default 0.6,
+  target_machine_cable_exercise_share_max numeric not null default 0.75,
+  typical_working_sets_per_exercise_min integer not null default 3,
+  typical_working_sets_per_exercise_max integer not null default 4,
+  historical_median_exercise_count numeric,
+  historical_median_working_sets numeric,
+  historical_median_total_recorded_sets numeric,
+  historical_median_duration_minutes numeric,
+  historical_median_seconds_per_recorded_set numeric,
+  historical_median_minutes_per_exercise numeric,
+  volume_preference text not null default 'adaptive',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table body_metric_goals enable row level security;
+alter table body_goal_progress_snapshots enable row level security;
+alter table daily_muscle_decisions enable row level security;
+alter table personal_training_style_profiles enable row level security;
+
+drop policy if exists "body_metric_goals own rows" on body_metric_goals;
+create policy "body_metric_goals own rows" on body_metric_goals
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "body_goal_progress_snapshots own rows" on body_goal_progress_snapshots;
+create policy "body_goal_progress_snapshots own rows" on body_goal_progress_snapshots
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "daily_muscle_decisions own rows" on daily_muscle_decisions;
+create policy "daily_muscle_decisions own rows" on daily_muscle_decisions
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "personal_training_style_profiles own rows" on personal_training_style_profiles;
+create policy "personal_training_style_profiles own rows" on personal_training_style_profiles
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);

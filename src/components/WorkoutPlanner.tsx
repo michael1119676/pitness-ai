@@ -19,7 +19,7 @@ import {
   saveWorkoutSession,
   type WorkoutUiSession
 } from "@/lib/local-store";
-import { countPlanSets, formatMinutes, intensityLabels, summarizeFocusMuscles } from "@/lib/mobile-ui";
+import { countPlanSets, countPlanWarmupSets, formatMinutes, intensityLabels, summarizeFocusMuscles } from "@/lib/mobile-ui";
 import type { Equipment, WorkoutPlan, WorkoutPlanItem } from "@/lib/types";
 import { adjustRecommendedWeight, findReplacementExercise } from "@/lib/workout-engine";
 
@@ -429,8 +429,11 @@ export function WorkoutPlanner() {
         <div className="mt-4 grid grid-cols-3 gap-2">
           <DarkMini label="예상" value={formatMinutes(snapshot.decision.estimatedDurationMinutes)} />
           <DarkMini label="운동" value={`${items.length}개`} />
-          <DarkMini label="세트" value={`${countPlanSets(items)}세트`} />
+          <DarkMini label="본세트" value={`${countPlanSets(items)}세트`} />
         </div>
+        <p className="mt-3 rounded-md bg-white/10 px-3 py-2 text-sm font-semibold text-slate-200">
+          워밍업 {countPlanWarmupSets(items)}세트 · 예상 총 기록 {countPlanSets(items) + countPlanWarmupSets(items)}세트
+        </p>
       </section>
 
       <section className="rounded-md border border-line bg-white p-4 shadow-soft">
@@ -456,7 +459,7 @@ export function WorkoutPlanner() {
                 <h2 className="mt-1 truncate text-lg font-semibold">{item.exercise.name}</h2>
                 <p className="mt-1 text-sm text-slate-600">{item.equipment.map((equipment) => equipment.name).join(", ")}</p>
                 <p className="mt-2 text-sm font-medium text-slate-700">
-                  {item.sets}세트 · {item.rep_min}-{item.rep_max}회 · {formatBodyPart(item.exercise.primary_muscle)}
+                  본세트 {item.sets}세트 · 워밍업 {item.warmupSets?.length ?? 0}세트 · {item.rep_min}-{item.rep_max}회 · {formatBodyPart(item.exercise.primary_muscle)}
                 </p>
               </div>
               <div className="flex shrink-0 gap-1">

@@ -4,6 +4,7 @@ import { equipmentCatalog } from "@/lib/equipment-data";
 import type {
   BodyComposition,
   BodyGoalProfile,
+  BodyMetricGoal,
   DailyCheckIn,
   DailyPlanRevision,
   MealLog,
@@ -29,6 +30,7 @@ export const defaultSettings: UserSettings = {
 };
 
 export const defaultBodyGoalProfile: BodyGoalProfile = {
+  id: "default-body-goal",
   mainBodyGoal: "aesthetic_v_taper",
   priorityMuscles: ["side_delt", "rear_delt", "lats", "upper_back", "upper_chest"],
   avoidOverdevelopmentMuscles: [],
@@ -41,6 +43,22 @@ export const defaultBodyGoalProfile: BodyGoalProfile = {
   weeklyWeightChangeTargetKg: 0,
   notes: ""
 };
+
+export const defaultBodyMetricGoals: BodyMetricGoal[] = [
+  {
+    id: "goal-skeletal-muscle-ratio-50",
+    type: "skeletal_muscle_to_weight_ratio",
+    direction: "at_least",
+    targetValue: 0.5,
+    targetMin: null,
+    targetMax: null,
+    priority: "primary",
+    enabled: true,
+    createdAt: "2026-06-20T00:00:00.000Z",
+    targetDate: null,
+    notes: "개인 체형 목표: 골격근량이 체중의 50% 이상"
+  }
+];
 
 export const defaultNutritionProfile: NutritionProfile = {
   startingTargetCalories: 2400,
@@ -261,6 +279,16 @@ export function loadBodyGoalProfile() {
 
 export function saveBodyGoalProfile(profile: BodyGoalProfile) {
   saveJson(localStoreKeys.bodyGoal, profile);
+}
+
+export function loadBodyMetricGoals() {
+  const stored = loadJson<BodyMetricGoal[]>(localStoreKeys.bodyMetricGoals, []);
+  if (stored.length === 0) return defaultBodyMetricGoals;
+  return stored;
+}
+
+export function saveBodyMetricGoals(goals: BodyMetricGoal[]) {
+  saveJson(localStoreKeys.bodyMetricGoals, goals);
 }
 
 export function loadDailyCheckIns() {

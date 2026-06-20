@@ -178,11 +178,25 @@ export interface Exercise {
   movement_pattern: string;
   movement_family: MovementFamily;
   required_equipment_ids: string[];
+  equipment_requirement?: {
+    allOf: string[];
+    oneOfGroups: string[][];
+  };
   compatible_equipment_categories: string[];
   equipment_type_preference: EquipmentType[];
+  exercise_role?:
+    | "primary_compound"
+    | "secondary_compound"
+    | "unilateral_compound"
+    | "primary_isolation"
+    | "secondary_isolation"
+    | "accessory"
+    | "stability"
+    | "rehab";
   default_sets: number;
   default_rep_min: number;
   default_rep_max: number;
+  default_warmup_sets?: number;
   default_rest_seconds: number;
   fatigue_score: FatigueScore;
   technical_difficulty: TechnicalDifficulty;
@@ -231,6 +245,12 @@ export interface WorkoutPlanItem {
   rep_max: number;
   rest_seconds: number;
   recommended_weight_lbs?: number;
+  warmupSets?: Array<{
+    kind: "warmup";
+    weightKg: number | null;
+    reps: number;
+    note: string;
+  }>;
   reason: string;
 }
 
@@ -244,6 +264,7 @@ export interface WorkoutPlan {
   intensity: Intensity;
   items: WorkoutPlanItem[];
   skippedSlots: WorkoutSlot[];
+  volumePrescription?: import("@/lib/daily-types").SessionVolumePrescription;
   notes: string[];
 }
 
@@ -273,15 +294,15 @@ export const preferenceLabels: Record<UserPreference, string> = {
 
 export const equipmentPreferenceLabels: Record<EquipmentPreferenceMode, string> = {
   machine_only: "머신만",
-  machine_cable_priority: "머신/케이블 우선",
-  free_weight_allowed: "프리웨이트 허용"
+  machine_cable_priority: "머신 비중 높게",
+  free_weight_allowed: "자동 균형"
 };
 
 export const emptyWorkoutInput: GenerateWorkoutInput = {
-  workoutType: "push",
-  availableMinutes: 45,
+  workoutType: "full_body",
+  availableMinutes: 70,
   intensity: "normal",
-  equipmentPreference: "machine_cable_priority",
+  equipmentPreference: "free_weight_allowed",
   soreMuscles: [],
   temporarilyUnavailableEquipmentIds: [],
   avoidedEquipmentIds: [],

@@ -52,6 +52,127 @@ export type PreferredTrainingStyle =
 export type DietAggressiveness = "conservative" | "moderate" | "aggressive";
 export type CardioPreference = "minimal" | "moderate" | "high";
 
+export type BodyMetricGoalType =
+  | "body_weight_kg"
+  | "body_fat_percentage"
+  | "skeletal_muscle_mass_kg"
+  | "skeletal_muscle_to_weight_ratio"
+  | "waist_cm"
+  | "custom";
+
+export type BodyMetricGoalDirection = "at_least" | "at_most" | "target_range";
+
+export interface BodyMetricGoal {
+  id: string;
+  type: BodyMetricGoalType;
+  direction: BodyMetricGoalDirection;
+  targetValue: number | null;
+  targetMin: number | null;
+  targetMax: number | null;
+  priority: "primary" | "secondary";
+  enabled: boolean;
+  createdAt: string;
+  targetDate: string | null;
+  notes: string | null;
+}
+
+export interface BodyGoalProgress {
+  goalId: string;
+  currentValue: number | null;
+  targetValue: number | null;
+  progressPercentage: number | null;
+  remainingValue: number | null;
+  status: "not_started" | "in_progress" | "achieved" | "insufficient_data";
+  latestMeasuredAt: string | null;
+  confidence: "low" | "medium" | "high";
+  scenarios: {
+    label: string;
+    description: string;
+  }[];
+  warnings: string[];
+}
+
+export type EquipmentMixMode =
+  | "adaptive_balanced"
+  | "machine_dominant"
+  | "free_weight_dominant"
+  | "machine_only"
+  | "custom";
+
+export interface PersonalTrainingStyleProfile {
+  equipmentMixMode: EquipmentMixMode;
+  targetFreeWeightExerciseShareMin: number;
+  targetFreeWeightExerciseShareMax: number;
+  targetMachineCableExerciseShareMin: number;
+  targetMachineCableExerciseShareMax: number;
+  typicalWorkingSetsPerExerciseMin: number;
+  typicalWorkingSetsPerExerciseMax: number;
+  historicalMedianExerciseCount: number | null;
+  historicalMedianWorkingSets: number | null;
+  historicalMedianTotalRecordedSets: number | null;
+  historicalMedianDurationMinutes: number | null;
+  historicalMedianSecondsPerRecordedSet: number | null;
+  historicalMedianMinutesPerExercise: number | null;
+  volumePreference: "low" | "moderate" | "high" | "adaptive";
+  updatedAt: string;
+}
+
+export type RecoveryStatus = "poor" | "limited" | "normal" | "fresh";
+
+export interface SessionVolumePrescription {
+  targetExerciseCount: number;
+  minExerciseCount: number;
+  maxExerciseCount: number;
+  targetWorkingSetCount: number;
+  minWorkingSetCount: number;
+  maxWorkingSetCount: number;
+  plannedWarmupSetCount: number;
+  targetTotalRecordedSetCount: number;
+  targetDurationMinutes: number;
+  volumeMultiplier: number;
+}
+
+export type ExerciseRole =
+  | "primary_compound"
+  | "secondary_compound"
+  | "unilateral_compound"
+  | "primary_isolation"
+  | "secondary_isolation"
+  | "accessory"
+  | "stability"
+  | "rehab";
+
+export type ExerciseModality = "machine" | "cable" | "barbell" | "dumbbell" | "smith_machine" | "bodyweight" | "accessory";
+
+export interface WarmupSetPrescription {
+  kind: "warmup";
+  weightKg: number | null;
+  reps: number;
+  note: string;
+}
+
+export interface DailyMuscleDecision {
+  sessionTitle: string;
+  selectedMuscles: {
+    muscle: string;
+    priority: number;
+    targetEffectiveSets: number;
+    reason: string;
+  }[];
+  excludedMuscles: {
+    muscle: string;
+    reason: string;
+  }[];
+  bodyGoalContribution: {
+    goalId: string;
+    explanation: string;
+  }[];
+  overallIntensity: "low" | "normal" | "high";
+  estimatedDurationMinutes: number;
+  summaryReasons: string[];
+  confidence: "low" | "medium" | "high";
+}
+
 export type ScheduleActivityType =
   | "long_walk"
   | "running"
@@ -64,6 +185,7 @@ export type ScheduleActivityType =
   | "custom";
 
 export interface BodyGoalProfile {
+  id: string;
   mainBodyGoal: MainBodyGoal;
   priorityMuscles: AvoidableBodyPart[];
   avoidOverdevelopmentMuscles: AvoidableBodyPart[];
@@ -73,8 +195,36 @@ export interface BodyGoalProfile {
   preferredTrainingStyle: PreferredTrainingStyle;
   dietAggressiveness: DietAggressiveness;
   cardioPreference: CardioPreference;
-  weeklyWeightChangeTargetKg: number;
-  notes: string;
+  weeklyWeightChangeTargetKg: number | null;
+  notes: string | null;
+}
+
+export interface WorkoutSession {
+  id: string;
+  startedAt: string;
+  completedAt: string | null;
+  durationSeconds: number | null;
+}
+
+export interface WorkoutSessionExercise {
+  id: string;
+  sessionId: string;
+  exerciseId: string;
+  order: number;
+}
+
+export interface WorkoutSet {
+  id: string;
+  sessionId: string;
+  sessionExerciseId: string;
+  exerciseId: string;
+  setType: "warmup" | "working";
+  completedAt: string | null;
+  weight: number | null;
+  reps: number | null;
+  rpe: number | null;
+  rir: number | null;
+  wasCompleted: boolean;
 }
 
 export interface ScheduleConstraint {
@@ -197,6 +347,8 @@ export interface InBodyTrendSummary {
   confidence: "low" | "medium" | "high";
   weightChangeKg: number | null;
   skeletalMuscleMassChangeKg: number | null;
+  skeletalMuscleToWeightRatio: number | null;
+  skeletalMuscleToWeightRatioChange: number | null;
   bodyFatMassChangeKg: number | null;
   bodyFatPercentageChange: number | null;
   fourWeekAverages: {
@@ -340,6 +492,7 @@ export interface DailyTrainingDecision {
   }[];
   overallIntensity: Intensity;
   volumeMultiplier: number;
+  volumePrescription?: SessionVolumePrescription;
   estimatedDurationMinutes: number;
   evidenceKeys: string[];
   reasoningSummary: string[];
