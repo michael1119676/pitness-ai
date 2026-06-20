@@ -1,17 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   CalendarDays,
   Dumbbell,
   Activity,
   ListChecks,
+  LogOut,
   Settings,
   Sparkles,
   Utensils,
+  UserRound,
   Wrench
 } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  clearActiveAppUser,
+  getActiveAppUser,
+  getUserInitial,
+  type AppUser
+} from "@/lib/app-users";
 
 const navItems = [
   { href: "/today", label: "오늘", icon: CalendarDays },
@@ -25,6 +34,49 @@ const navItems = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [activeUser, setActiveUser] = useState<AppUser | null | undefined>(undefined);
+  const isLoginRoute = pathname === "/login";
+
+  useEffect(() => {
+    const refresh = () => {
+      const user = getActiveAppUser();
+      setActiveUser(user);
+      if (!user && !isLoginRoute) {
+        router.replace("/login");
+      }
+    };
+
+    refresh();
+    window.addEventListener("adfc-active-user-changed", refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("adfc-active-user-changed", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, [isLoginRoute, router]);
+
+  function leaveUser() {
+    clearActiveAppUser();
+    setActiveUser(null);
+    router.push("/login");
+  }
+
+  if (isLoginRoute) {
+    return <div className="min-h-screen text-ink">{children}</div>;
+  }
+
+  if (activeUser === undefined) {
+    return (
+      <div className="grid min-h-screen place-items-center px-4 text-sm font-semibold text-slate-500">
+        프로필 확인 중
+      </div>
+    );
+  }
+
+  if (!activeUser) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen pb-24 text-ink md:pb-0">
@@ -63,6 +115,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
+          <div className="hidden shrink-0 items-center gap-2 md:flex">
+            <Link
+              href="/login"
+              className="flex min-h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-semibold text-slate-700"
+            >
+              <span className="grid size-7 place-items-center rounded-md bg-mint text-xs font-bold text-white">
+                {getUserInitial(activeUser.name)}
+              </span>
+              <span className="max-w-24 truncate">{activeUser.name}</span>
+            </Link>
+            <button
+              type="button"
+              onClick={leaveUser}
+              className="grid size-10 place-items-center rounded-md border border-line bg-white text-slate-600"
+              aria-label="로그아웃"
+              title="로그아웃"
+            >
+              <LogOut size={17} aria-hidden />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -72,7 +144,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-white/95 px-2 py-2 shadow-soft backdrop-blur md:hidden"
         aria-label="주요 메뉴"
       >
-        <div className="grid grid-cols-7 gap-1">
+        <div className="grid grid-cols-8 gap-1">
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -89,6 +161,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
+          <Link
+            href="/login"
+            className="flex min-h-14 flex-col items-center justify-center gap-1 rounded-md text-[11px] font-medium text-slate-600"
+          >
+            <UserRound size={18} aria-hidden />
+            <span className="max-w-full truncate px-1">{activeUser.name}</span>
+          </Link>
         </div>
       </nav>
     </div>

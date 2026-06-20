@@ -17,6 +17,7 @@ import {
   type Muscle,
   type UserSettings
 } from "@/lib/types";
+import { getScopedLocalStoreKey } from "@/lib/app-users";
 import { queueCloudSync } from "@/lib/cloud-sync";
 import { localStoreKeys } from "@/lib/local-store-keys";
 
@@ -133,7 +134,7 @@ export function loadEquipment() {
   if (!canUseStorage()) return equipmentCatalog;
 
   try {
-    const raw = window.localStorage.getItem(localStoreKeys.equipment);
+    const raw = window.localStorage.getItem(getScopedLocalStoreKey(localStoreKeys.equipment));
     if (!raw) return equipmentCatalog;
     const parsed = JSON.parse(raw) as Equipment[];
     return mergeWithSeed(parsed);
@@ -144,13 +145,16 @@ export function loadEquipment() {
 
 export function saveEquipment(equipment: Equipment[]) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(localStoreKeys.equipment, JSON.stringify(equipment));
+  window.localStorage.setItem(
+    getScopedLocalStoreKey(localStoreKeys.equipment),
+    JSON.stringify(equipment)
+  );
   queueCloudSync();
 }
 
 export function resetEquipment() {
   if (!canUseStorage()) return equipmentCatalog;
-  window.localStorage.removeItem(localStoreKeys.equipment);
+  window.localStorage.removeItem(getScopedLocalStoreKey(localStoreKeys.equipment));
   queueCloudSync();
   return equipmentCatalog;
 }
@@ -159,7 +163,7 @@ export function loadSettings() {
   if (!canUseStorage()) return defaultSettings;
 
   try {
-    const raw = window.localStorage.getItem(localStoreKeys.settings);
+    const raw = window.localStorage.getItem(getScopedLocalStoreKey(localStoreKeys.settings));
     if (!raw) return defaultSettings;
     return { ...defaultSettings, ...(JSON.parse(raw) as Partial<UserSettings>) };
   } catch {
@@ -169,7 +173,10 @@ export function loadSettings() {
 
 export function saveSettings(settings: UserSettings) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(localStoreKeys.settings, JSON.stringify(settings));
+  window.localStorage.setItem(
+    getScopedLocalStoreKey(localStoreKeys.settings),
+    JSON.stringify(settings)
+  );
   queueCloudSync();
 }
 
@@ -183,7 +190,7 @@ function loadJson<T>(key: string, fallback: T): T {
   if (!canUseStorage()) return fallback;
 
   try {
-    const raw = window.localStorage.getItem(key);
+    const raw = window.localStorage.getItem(getScopedLocalStoreKey(key));
     if (!raw) return fallback;
     return JSON.parse(raw) as T;
   } catch {
@@ -193,7 +200,7 @@ function loadJson<T>(key: string, fallback: T): T {
 
 function saveJson<T>(key: string, value: T) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(key, JSON.stringify(value));
+  window.localStorage.setItem(getScopedLocalStoreKey(key), JSON.stringify(value));
   queueCloudSync();
 }
 

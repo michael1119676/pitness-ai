@@ -16,9 +16,22 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
-The app uses `app_state_snapshots` for MVP cloud persistence. It stores the current local app
-state as user-owned JSONB under Supabase RLS. This keeps the existing string-based equipment and
-exercise IDs intact while the normalized tables are available for the next migration step.
+The app uses `app_state_snapshots` for MVP cloud persistence. It stores each in-app profile as
+user-owned JSONB under Supabase RLS, keyed by `(user_id, profile_id)`. This keeps the existing
+string-based equipment and exercise IDs intact while the normalized tables are available for the
+next migration step.
+
+If you already ran an older schema where `app_state_snapshots.user_id` was the only primary key,
+run this once in SQL Editor before syncing multiple profiles:
+
+```sql
+alter table app_state_snapshots
+  add column if not exists profile_id text not null default 'default',
+  add column if not exists profile_name text not null default '사용자';
+
+alter table app_state_snapshots drop constraint if exists app_state_snapshots_pkey;
+alter table app_state_snapshots add primary key (user_id, profile_id);
+```
 
 ## 2. Vercel
 

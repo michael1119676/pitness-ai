@@ -28,6 +28,17 @@ export function InBodyImport() {
     setMessage("");
     const text = await file.text();
     const parsed = parseInBodyCsv(text);
+    if (parsed.records.length === 0) {
+      setStatus({
+        inserted: 0,
+        duplicate: 0,
+        failed: parsed.failedRows.length,
+        failedRows: parsed.failedRows
+      });
+      setMessage("저장 가능한 인바디 행을 찾지 못했습니다. CSV의 날짜와 측정값 헤더를 확인하세요.");
+      return;
+    }
+
     const result = upsertBodyCompositions(loadBodyCompositions(), parsed.records);
     saveBodyCompositions(result.records);
 
@@ -58,7 +69,11 @@ export function InBodyImport() {
       failed: parsed.failedRows.length,
       failedRows: parsed.failedRows
     });
-    setMessage("CSV 가져오기를 완료했습니다.");
+    setMessage(
+      result.inserted > 0
+        ? "CSV 가져오기를 완료했습니다."
+        : "새 기록 없이 중복 기록만 확인했습니다."
+    );
   }
 
   return (

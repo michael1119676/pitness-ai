@@ -432,9 +432,12 @@ create table coach_notes (
 );
 
 create table app_state_snapshots (
-  user_id uuid primary key references auth.users(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  profile_id text not null default 'default',
+  profile_name text not null default '사용자',
   snapshot jsonb not null default '{}',
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  primary key (user_id, profile_id)
 );
 
 alter table workout_sessions

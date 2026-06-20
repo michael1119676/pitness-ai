@@ -2,8 +2,53 @@ import type { BodyComposition, InBodyTrendSummary } from "@/lib/daily-types";
 
 type CsvRow = Record<string, string>;
 
+const headerAliases = {
+  date: ["날짜", "측정일", "측정일시", "검사일", "검사일시", "date", "test date", "measurement date", "measured at", "datetime"],
+  device: ["측정장비", "장비", "device", "model", "machine"],
+  weightKg: ["체중(kg)", "체중", "weight", "weight(kg)", "weight [kg]"],
+  skeletalMuscleMassKg: [
+    "골격근량(kg)",
+    "골격근량",
+    "skeletal muscle mass",
+    "skeletal muscle mass(kg)",
+    "smm",
+    "smm(kg)"
+  ],
+  muscleMassKg: ["근육량(kg)", "근육량", "muscle mass", "muscle mass(kg)", "soft lean mass"],
+  bodyFatMassKg: ["체지방량(kg)", "체지방량", "body fat mass", "body fat mass(kg)", "bfm", "fat mass"],
+  bmi: ["bmi(kg/m²)", "bmi(kg/m2)", "bmi"],
+  bodyFatPercentage: ["체지방률(%)", "체지방률", "percent body fat", "body fat percentage", "body fat %", "pbf", "pbf(%)"],
+  basalMetabolicRateKcal: ["기초대사량(kcal)", "기초대사량", "basal metabolic rate", "bmr", "bmr(kcal)"],
+  inBodyScore: ["인바디점수", "인바디 점수", "inbody score", "score"],
+  rightArmMuscleKg: ["오른팔 근육량(kg)", "오른팔근육량", "right arm muscle", "right arm muscle mass"],
+  leftArmMuscleKg: ["왼팔 근육량(kg)", "왼팔근육량", "left arm muscle", "left arm muscle mass"],
+  trunkMuscleKg: ["몸통 근육량(kg)", "몸통근육량", "trunk muscle", "trunk muscle mass"],
+  rightLegMuscleKg: ["오른다리 근육량(kg)", "오른다리근육량", "right leg muscle", "right leg muscle mass"],
+  leftLegMuscleKg: ["왼다리 근육량(kg)", "왼다리근육량", "left leg muscle", "left leg muscle mass"],
+  totalBodyWaterL: ["체수분(l)", "체수분", "total body water", "tbw", "tbw(l)"],
+  intracellularWaterL: ["세포내수분(l)", "세포내수분", "intracellular water", "icw", "icw(l)"],
+  extracellularWaterL: ["세포외수분(l)", "세포외수분", "extracellular water", "ecw", "ecw(l)"],
+  extracellularWaterRatio: ["세포외수분비", "ecw/tbw", "ecw ratio", "extracellular water ratio"],
+  waistCircumferenceCm: ["허리둘레(cm)", "허리둘레", "waist circumference", "waist"],
+  visceralFatAreaCm2: ["내장지방단면적(cm²)", "내장지방단면적(cm2)", "visceral fat area", "vfa"],
+  visceralFatLevel: ["내장지방레벨(level)", "내장지방레벨", "visceral fat level", "vfl"]
+} as const;
+
 function stripBom(value: string) {
   return value.replace(/^\uFEFF/, "");
+}
+
+function normalizeHeader(value: string) {
+  return stripBom(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[＿_]/g, "")
+    .replace(/\s+/g, "")
+    .replace(/[［\[\]］]/g, "")
+    .replace(/（/g, "(")
+    .replace(/）/g, ")")
+    .replace(/㎏/g, "kg")
+    .replace(/ℓ/g, "l");
 }
 
 function splitCsvLine(line: string) {
@@ -32,6 +77,21 @@ function splitCsvLine(line: string) {
   return cells;
 }
 
+function hasHeader(cells: string[], aliases: readonly string[]) {
+  const normalizedCells = new Set(cells.map(normalizeHeader));
+  return aliases.some((alias) => normalizedCells.has(normalizeHeader(alias)));
+}
+
+function looksLikeHeader(cells: string[]) {
+  const hasDate = hasHeader(cells, headerAliases.date);
+  const hasBodyMetric =
+    hasHeader(cells, headerAliases.weightKg) ||
+    hasHeader(cells, headerAliases.skeletalMuscleMassKg) ||
+    hasHeader(cells, headerAliases.bodyFatMassKg) ||
+    hasHeader(cells, headerAliases.bodyFatPercentage);
+  return hasDate && hasBodyMetric;
+}
+
 function parseCsv(text: string): CsvRow[] {
   const lines = stripBom(text)
     .split(/\r?\n/)
@@ -40,66 +100,126 @@ function parseCsv(text: string): CsvRow[] {
 
   if (lines.length < 2) return [];
 
-  const headers = splitCsvLine(lines[0]).map(stripBom);
-  return lines.slice(1).map((line) => {
-    const cells = splitCsvLine(line);
+  const parsedLines = lines.map(splitCsvLine);
+  const headerIndex = parsedLines.findIndex(looksLikeHeader);
+  if (headerIndex === -1 || headerIndex === parsedLines.length - 1) return [];
+
+  const headers = parsedLines[headerIndex].map(stripBom);
+  return parsedLines.slice(headerIndex + 1).map((cells) => {
     return headers.reduce<CsvRow>((row, header, index) => {
-      row[header] = cells[index] ?? "";
+      const cell = cells[index] ?? "";
+      row[header] = cell;
+      row[normalizeHeader(header)] = cell;
       return row;
     }, {});
   });
 }
 
 export function parseInBodyDate(value: string) {
-  const compact = value.trim();
-  if (!/^\d{14}$/.test(compact)) return "";
-  const year = compact.slice(0, 4);
-  const month = compact.slice(4, 6);
-  const day = compact.slice(6, 8);
-  const hour = compact.slice(8, 10);
-  const minute = compact.slice(10, 12);
-  const second = compact.slice(12, 14);
-  return `${year}-${month}-${day}T${hour}:${minute}:${second}+09:00`;
+  const raw = value.trim();
+  if (!raw) return "";
+
+  const compact = raw.replace(/\D/g, "");
+  if (/^\d{8}(\d{4}|\d{6})?$/.test(compact)) {
+    const year = compact.slice(0, 4);
+    const month = compact.slice(4, 6);
+    const day = compact.slice(6, 8);
+    const hour = compact.slice(8, 10) || "00";
+    const minute = compact.slice(10, 12) || "00";
+    const second = compact.slice(12, 14) || "00";
+    return formatInBodyDate(year, month, day, hour, minute, second);
+  }
+
+  const matched = raw.match(
+    /(\d{4})\D+(\d{1,2})\D+(\d{1,2})(?:\D+(\d{1,2})\D+(\d{1,2})(?:\D+(\d{1,2}))?)?/
+  );
+  if (!matched) return "";
+
+  const [, year, month, day, hour = "00", minute = "00", second = "00"] = matched;
+  return formatInBodyDate(year, month, day, hour, minute, second);
+}
+
+function formatInBodyDate(
+  year: string,
+  month: string,
+  day: string,
+  hour: string,
+  minute: string,
+  second: string
+) {
+  const dateParts = [year, month, day, hour, minute, second].map(Number);
+  if (dateParts.some((part) => !Number.isFinite(part))) return "";
+  const [, monthNumber, dayNumber, hourNumber, minuteNumber, secondNumber] = dateParts;
+  if (
+    monthNumber < 1 ||
+    monthNumber > 12 ||
+    dayNumber < 1 ||
+    dayNumber > 31 ||
+    hourNumber > 23 ||
+    minuteNumber > 59 ||
+    secondNumber > 59
+  ) {
+    return "";
+  }
+
+  const monthPadded = month.padStart(2, "0");
+  const dayPadded = day.padStart(2, "0");
+  const hourPadded = hour.padStart(2, "0");
+  const minutePadded = minute.padStart(2, "0");
+  const secondPadded = second.padStart(2, "0");
+  return `${year}-${monthPadded}-${dayPadded}T${hourPadded}:${minutePadded}:${secondPadded}+09:00`;
 }
 
 export function normalizeInBodyValue(value: string) {
   const trimmed = value.trim();
   if (!trimmed || trimmed === "-") return null;
-  const normalized = Number(trimmed.replaceAll(",", ""));
+  const matched = trimmed.replaceAll(",", "").match(/-?\d+(?:\.\d+)?/);
+  if (!matched) return null;
+  const normalized = Number(matched[0]);
   return Number.isFinite(normalized) ? normalized : null;
 }
 
-function value(row: CsvRow, header: string) {
-  return normalizeInBodyValue(row[header] ?? "");
+function cell(row: CsvRow, aliases: readonly string[]) {
+  for (const alias of aliases) {
+    const direct = row[alias];
+    if (direct !== undefined) return direct;
+    const normalized = row[normalizeHeader(alias)];
+    if (normalized !== undefined) return normalized;
+  }
+  return "";
+}
+
+function value(row: CsvRow, aliases: readonly string[]) {
+  return normalizeInBodyValue(cell(row, aliases));
 }
 
 export function mapInBodyRowToBodyComposition(row: CsvRow): BodyComposition | null {
-  const measuredAt = parseInBodyDate(row["날짜"] ?? "");
+  const measuredAt = parseInBodyDate(cell(row, headerAliases.date));
   if (!measuredAt) return null;
 
   return {
     measuredAt,
-    device: row["측정장비"] || null,
-    weightKg: value(row, "체중(kg)"),
-    skeletalMuscleMassKg: value(row, "골격근량(kg)"),
-    muscleMassKg: value(row, "근육량(kg)"),
-    bodyFatMassKg: value(row, "체지방량(kg)"),
-    bmi: value(row, "BMI(kg/m²)"),
-    bodyFatPercentage: value(row, "체지방률(%)"),
-    basalMetabolicRateKcal: value(row, "기초대사량(kcal)"),
-    inBodyScore: value(row, "인바디점수"),
-    rightArmMuscleKg: value(row, "오른팔 근육량(kg)"),
-    leftArmMuscleKg: value(row, "왼팔 근육량(kg)"),
-    trunkMuscleKg: value(row, "몸통 근육량(kg)"),
-    rightLegMuscleKg: value(row, "오른다리 근육량(kg)"),
-    leftLegMuscleKg: value(row, "왼다리 근육량(kg)"),
-    totalBodyWaterL: value(row, "체수분(L)"),
-    intracellularWaterL: value(row, "세포내수분(L)"),
-    extracellularWaterL: value(row, "세포외수분(L)"),
-    extracellularWaterRatio: value(row, "세포외수분비"),
-    waistCircumferenceCm: value(row, "허리둘레(cm)"),
-    visceralFatAreaCm2: value(row, "내장지방단면적(cm²)"),
-    visceralFatLevel: value(row, "내장지방레벨(Level)"),
+    device: cell(row, headerAliases.device) || null,
+    weightKg: value(row, headerAliases.weightKg),
+    skeletalMuscleMassKg: value(row, headerAliases.skeletalMuscleMassKg),
+    muscleMassKg: value(row, headerAliases.muscleMassKg),
+    bodyFatMassKg: value(row, headerAliases.bodyFatMassKg),
+    bmi: value(row, headerAliases.bmi),
+    bodyFatPercentage: value(row, headerAliases.bodyFatPercentage),
+    basalMetabolicRateKcal: value(row, headerAliases.basalMetabolicRateKcal),
+    inBodyScore: value(row, headerAliases.inBodyScore),
+    rightArmMuscleKg: value(row, headerAliases.rightArmMuscleKg),
+    leftArmMuscleKg: value(row, headerAliases.leftArmMuscleKg),
+    trunkMuscleKg: value(row, headerAliases.trunkMuscleKg),
+    rightLegMuscleKg: value(row, headerAliases.rightLegMuscleKg),
+    leftLegMuscleKg: value(row, headerAliases.leftLegMuscleKg),
+    totalBodyWaterL: value(row, headerAliases.totalBodyWaterL),
+    intracellularWaterL: value(row, headerAliases.intracellularWaterL),
+    extracellularWaterL: value(row, headerAliases.extracellularWaterL),
+    extracellularWaterRatio: value(row, headerAliases.extracellularWaterRatio),
+    waistCircumferenceCm: value(row, headerAliases.waistCircumferenceCm),
+    visceralFatAreaCm2: value(row, headerAliases.visceralFatAreaCm2),
+    visceralFatLevel: value(row, headerAliases.visceralFatLevel),
     raw: row
   };
 }

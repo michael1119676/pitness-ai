@@ -273,9 +273,17 @@ function scenario4() {
     "날짜,측정장비,체중(kg),골격근량(kg),체지방량(kg),체지방률(%)",
     "20260619155555,InBody,80.2,34.1,0,14.2"
   ].join("\n");
+  const exportedCsv = [
+    "Member,Sample",
+    "Date,Device,Weight,SMM,Body Fat Mass,PBF",
+    "2026-06-20 09:05,InBody 770,79.4kg,34.5kg,10.8kg,13.6%"
+  ].join("\n");
   const parsed = parseInBodyCsv(csv);
+  const exported = parseInBodyCsv(exportedCsv);
   const trend = getInBodyTrendSummary(parsed.records);
   assert.equal(parsed.records[0].bodyFatMassKg, 0);
+  assert.equal(exported.records[0].measuredAt, "2026-06-20T09:05:00+09:00");
+  assert.equal(exported.records[0].skeletalMuscleMassKg, 34.5);
   assert.equal(trend.status, "insufficient_data");
   assert.equal(trend.summary.join(" ").includes("근손실"), false);
 }

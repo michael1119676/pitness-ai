@@ -31,7 +31,9 @@ export function CloudSyncPanel() {
     lastPushAt: null,
     lastPullAt: null,
     lastError: null,
-    userId: null
+    userId: null,
+    profileId: null,
+    profileName: null
   });
   const [isBusy, setIsBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -83,8 +85,9 @@ export function CloudSyncPanel() {
         </span>
       </div>
 
-      <div className="mt-4 grid gap-2 md:grid-cols-4">
-        <Metric label="사용자" value={shortId(status.userId)} />
+      <div className="mt-4 grid gap-2 md:grid-cols-5">
+        <Metric label="앱 프로필" value={status.profileName ?? "-"} />
+        <Metric label="Supabase" value={shortId(status.userId)} />
         <Metric label="마지막 업로드" value={formatTime(status.lastPushAt)} />
         <Metric label="마지막 복원" value={formatTime(status.lastPullAt)} />
         <Metric label="마지막 오류" value={status.lastError ?? "-"} />

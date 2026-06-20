@@ -1,5 +1,6 @@
 "use client";
 
+import { getActiveAppUser, getScopedLocalStoreKey } from "@/lib/app-users";
 import { appLocalStorageKeys, localStoreKeys } from "@/lib/local-store-keys";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase-client";
 
@@ -10,6 +11,8 @@ export interface CloudSyncMetadata {
   lastPullAt: string | null;
   lastError: string | null;
   userId: string | null;
+  profileId: string | null;
+  profileName: string | null;
 }
 
 export interface CloudSyncStatus extends CloudSyncMetadata {
@@ -17,8 +20,10 @@ export interface CloudSyncStatus extends CloudSyncMetadata {
 }
 
 interface AppStateSnapshot {
-  version: 1;
+  version: 2;
   createdAt: string;
+  profileId: string;
+  profileName: string;
   values: Record<string, SnapshotValue>;
 }
 
@@ -26,7 +31,9 @@ const emptyMetadata: CloudSyncMetadata = {
   lastPushAt: null,
   lastPullAt: null,
   lastError: null,
-  userId: null
+  userId: null,
+  profileId: null,
+  profileName: null
 };
 
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -40,7 +47,7 @@ function loadMetadata(): CloudSyncMetadata {
   if (!canUseStorage()) return emptyMetadata;
 
   try {
-    const raw = window.localStorage.getItem(localStoreKeys.cloudSyncMeta);
+    const raw = window.localStorage.getItem(getScopedLocalStoreKey(localStoreKeys.cloudSyncMeta));
     return raw ? { ...emptyMetadata, ...(JSON.parse(raw) as Partial<CloudSyncMetadata>) } : emptyMetadata;
   } catch {
     return emptyMetadata;
@@ -49,7 +56,10 @@ function loadMetadata(): CloudSyncMetadata {
 
 function saveMetadata(metadata: CloudSyncMetadata) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(localStoreKeys.cloudSyncMeta, JSON.stringify(metadata));
+  window.localStorage.setItem(
+    getScopedLocalStoreKey(localStoreKeys.cloudSyncMeta),
+    JSON.stringify(metadata)
+  );
 }
 
 function setSyncError(error: unknown) {
@@ -66,29 +76,43 @@ export function getCloudSyncStatus(): CloudSyncStatus {
 }
 
 export function exportLocalAppSnapshot(): AppStateSnapshot {
+  const profile = getActiveAppUser();
+  if (!profile) {
+    throw new Error("먼저 앱 사용자를 선택하세요.");
+  }
+
   const values = appLocalStorageKeys.reduce<Record<string, SnapshotValue>>((snapshot, key) => {
-    snapshot[key] = canUseStorage() ? window.localStorage.getItem(key) : null;
+    snapshot[key] = canUseStorage()
+      ? window.localStorage.getItem(getScopedLocalStoreKey(key, profile.id))
+      : null;
     return snapshot;
   }, {});
 
   return {
-    version: 1,
+    version: 2,
     createdAt: new Date().toISOString(),
+    profileId: profile.id,
+    profileName: profile.name,
     values
   };
 }
 
 export function restoreLocalAppSnapshot(snapshot: AppStateSnapshot) {
   if (!canUseStorage()) return;
+  const profile = getActiveAppUser();
+  if (!profile) {
+    throw new Error("먼저 앱 사용자를 선택하세요.");
+  }
 
   suppressAutoSync = true;
   try {
     appLocalStorageKeys.forEach((key) => {
       const value = snapshot.values[key] ?? null;
+      const scopedKey = getScopedLocalStoreKey(key, profile.id);
       if (value === null) {
-        window.localStorage.removeItem(key);
+        window.localStorage.removeItem(scopedKey);
       } else {
-        window.localStorage.setItem(key, value);
+        window.localStorage.setItem(scopedKey, value);
       }
     });
   } finally {
@@ -97,6 +121,11 @@ export function restoreLocalAppSnapshot(snapshot: AppStateSnapshot) {
 }
 
 export async function ensureCloudSession() {
+  const profile = getActiveAppUser();
+  if (!profile) {
+    throw new Error("먼저 앱 사용자를 선택하세요.");
+  }
+
   const supabase = getSupabaseBrowserClient();
   if (!supabase) {
     throw new Error("NEXT_PUBLIC_SUPABASE_URL 또는 NEXT_PUBLIC_SUPABASE_ANON_KEY가 없습니다.");
@@ -105,7 +134,13 @@ export async function ensureCloudSession() {
   const existing = await supabase.auth.getSession();
   if (existing.data.session?.user) {
     const userId = existing.data.session.user.id;
-    saveMetadata({ ...loadMetadata(), userId, lastError: null });
+    saveMetadata({
+      ...loadMetadata(),
+      userId,
+      profileId: profile.id,
+      profileName: profile.name,
+      lastError: null
+    });
     return { supabase, userId };
   }
 
@@ -118,17 +153,30 @@ export async function ensureCloudSession() {
   }
 
   const userId = signedIn.data.user.id;
-  saveMetadata({ ...loadMetadata(), userId, lastError: null });
+  saveMetadata({
+    ...loadMetadata(),
+    userId,
+    profileId: profile.id,
+    profileName: profile.name,
+    lastError: null
+  });
   return { supabase, userId };
 }
 
 export async function pushLocalSnapshotToCloud() {
+  const profile = getActiveAppUser();
+  if (!profile) {
+    throw new Error("먼저 앱 사용자를 선택하세요.");
+  }
+
   const { supabase, userId } = await ensureCloudSession();
   const snapshot = exportLocalAppSnapshot();
   const updatedAt = new Date().toISOString();
 
   const result = await supabase.from("app_state_snapshots").upsert({
     user_id: userId,
+    profile_id: profile.id,
+    profile_name: profile.name,
     snapshot,
     updated_at: updatedAt
   });
@@ -139,18 +187,26 @@ export async function pushLocalSnapshotToCloud() {
     ...loadMetadata(),
     lastPushAt: updatedAt,
     lastError: null,
-    userId
+    userId,
+    profileId: profile.id,
+    profileName: profile.name
   });
 
   return { userId, updatedAt };
 }
 
 export async function pullCloudSnapshotToLocal() {
+  const profile = getActiveAppUser();
+  if (!profile) {
+    throw new Error("먼저 앱 사용자를 선택하세요.");
+  }
+
   const { supabase, userId } = await ensureCloudSession();
   const result = await supabase
     .from("app_state_snapshots")
     .select("snapshot, updated_at")
     .eq("user_id", userId)
+    .eq("profile_id", profile.id)
     .maybeSingle();
 
   if (result.error) throw new Error(result.error.message);
@@ -164,7 +220,9 @@ export async function pullCloudSnapshotToLocal() {
     ...loadMetadata(),
     lastPullAt: pulledAt,
     lastError: null,
-    userId
+    userId,
+    profileId: profile.id,
+    profileName: profile.name
   });
 
   return { userId, pulledAt, cloudUpdatedAt: result.data.updated_at as string | null };
